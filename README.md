@@ -9,23 +9,31 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-<p align="center"><b>Review code changes by what they do, not line by line.</b></p>
+<p align="center"><b>Review code changes by what they do, and learn the concepts behind them.</b></p>
 
-perspica reads a diff the way a careful reviewer would. It parses both sides, works out what actually changed (a rename, a new parameter, a moved function, a real logic change), sets aside the mechanical noise (reformatting, comments, rename-only lines, unchanged moves, generated files), and points at what a plain diff hides: references to names that no longer exist, calls that weren't updated for a new signature, code left unused.
+perspica reads a diff by working out what actually changed (a rename, a new parameter, a moved function, a real logic change), setting aside the mechanical noise (reformatting, comments, rename-only lines, unchanged moves, generated files), and pointing at what a plain diff hides: references to names that no longer exist, calls that weren't updated for a new signature, code left unused.
 
-None of that needs a model. perspica parses both versions with tree-sitter and follows the calls between them, so it's one local binary that answers in a few hundred milliseconds on a typical PR, gives the same answer every time, and needs no API key. An LLM is an optional extra: it groups the changes by intent, rates the risk of each group and writes a summary, and nothing leaves your machine unless you ask for it.
+None of that needs a model. perspica parses both versions with tree-sitter and follows the calls between them, so it's one local binary that answers in a few hundred milliseconds on a typical PR, gives the same answer every time, and needs no API key. An LLM is an optional, but useful, extra: it groups the changes by intent, rates the risk of each group and writes a summary, and nothing leaves your machine unless you ask for it.
 
 It understands **TypeScript and JavaScript** (including TSX and JSX), **Python**, **Rust**, **Go**, **Java**, **Kotlin**, **Scala**, **C#**, **C**, **PHP** and **Ruby** (Rails included). Files in other languages still show up, as ordinary line diffs.
 
 It's built for reviewing work done with coding agents. When the change came from your Claude Code or Codex session, perspica shows what you asked for in your own words and, with an LLM, marks which parts you asked for and which the agent decided on its own.
 
-<a href="docs/media/perspica-demo.mp4"><img alt="perspica demo: a summary and changes grouped by intent, what to check before merging, the reading order with test reach, unified and split views, mechanical noise folded away, the LLM analysis dialog, and terminal output" src="docs/media/perspica-demo.gif"></a>
+And when a change relies on something you haven't worked with, the **Learn** tab explains it. Focus is on the few concepts or architecture changes that matter for the change. It will provide a short lesson, a diagram or animation when one helps, and a quiz to check you've got it. When there's nothing new to learn, it says so. **[See the demo video for Learn](#learn)**.
 
-<sub>Reviewing [colinhacks/zod#6587](https://github.com/colinhacks/zod/pull/6587) (intent, checks, split view), [pallets/click#3767](https://github.com/pallets/click/pull/3767) (reading order, analysis, terminal) and [charmbracelet/bubbletea#1801](https://github.com/charmbracelet/bubbletea/pull/1801) (noise). The agent-session example is illustrative. [Full-quality video (MP4)](docs/media/perspica-demo.mp4).</sub>
+<a href="docs/media/perspica-demo.mp4"><img alt="perspica demo: an LLM analysis grouping the changes by intent, the summary, what to check before merging, the reading order with test reach, unified and split views, the agent-session view, and terminal output" src="docs/media/perspica-demo.gif"></a>
+
+<sub>Reviewing [pallets/click#3767](https://github.com/pallets/click/pull/3767) (analysis, reading order, terminal) and [colinhacks/zod#6587](https://github.com/colinhacks/zod/pull/6587) (summary, checks, split view). The agent-session example is illustrative. [Full-quality video (MP4)](docs/media/perspica-demo.mp4).</sub>
 
 **[See it on real pull requests](https://sshah03.github.io/perspica/)** from ripgrep, Flask, Spark and more. Nothing to install.
 
 ## Install
+
+```bash
+cargo install perspica
+```
+
+Or with Homebrew:
 
 ```bash
 brew install sshah03/perspica/perspica
@@ -37,7 +45,7 @@ Or with the install script, which puts the binary in `~/.local/bin`:
 curl -fsSL https://raw.githubusercontent.com/sshah03/perspica/main/install.sh | sh
 ```
 
-Or with Cargo (`cargo install perspica`), or download a binary for macOS, Linux or Windows from [Releases](https://github.com/sshah03/perspica/releases), or build from source:
+Or download a binary for macOS, Linux or Windows from [Releases](https://github.com/sshah03/perspica/releases), or build from source:
 
 ```bash
 git clone https://github.com/sshah03/perspica && cd perspica
@@ -66,11 +74,11 @@ perspica --json                           # machine-readable output
 perspica --pr 123 --format html           # the viewer as one file to share, with any saved analysis
 ```
 
-Everything above works on its own. The optional LLM analysis (`-s`, or **Analyze…** in the viewer) runs through Claude Code, an API key or Ollama; see [LLM analysis](#llm-analysis) for setup.
+Everything above works on its own. The optional LLM analysis (`-s`, or **Analyze…** in the viewer) runs through Claude Code, an API key or Ollama; see [LLM analysis](#llm-analysis) for setup. Alternatively you can ask your coding assistant to run it for you.
 
 ## What you get
 
-**Noise set aside.** Formatting, comment-only edits, lines that differ only by a rename, code moved unchanged, generated and vendored files are tagged and collapsed, so the lines that carry real changes stand out. Tests and docs are their own tier.
+**Limited Noise.** Formatting, comment-only edits, lines that differ only by a rename, code moved unchanged, generated and vendored files are tagged and collapsed, so the lines that carry real changes stand out. Tests and docs are their own tier.
 
 **Every change named.** Renames (even when the body was also edited), signature changes (new required vs. optional parameters), dependency changes per module and symbol, extractions into new functions, moves within and across files, logic changes per function and method.
 
@@ -86,9 +94,11 @@ Everything above works on its own. The optional LLM analysis (`-s`, or **Analyze
   <img alt="Reading order for pallets/click#3767: get_pager_file, then the pager context manager and the pagers it calls, each with the test path that reaches it" src="docs/images/reading-order-light.jpg">
 </picture>
 
-**What you asked for.** If the change was made with Claude Code or Codex, perspica shows your prompts from the sessions that edited these files. With an LLM analysis, each group of changes is marked *asked*, with a short quote checked word for word against your prompts, or *agent's call*: the agent decided it on its own. Those are the ones to look at first.
+**What you asked for.** If the change was made with Claude Code or Codex on your machine, perspica shows your prompts from the sessions that edited these files. With an LLM analysis, each group of changes is marked *asked*, with a short quote checked word for word against your prompts, or *agent's call*: the agent decided it on its own.
 
 **Intent, risk and a summary (optional).** With an LLM, changes are grouped by what they're for, each with a risk level and what to verify, plus a summary and the model's notes. Those are kept apart from what perspica found in the code, and labeled as less certain.
+
+**The concepts behind it (optional).** With an LLM, the Learn tab explains the ideas the change relies on and quizzes you on them. See [Learn](#learn).
 
 ## LLM analysis
 
@@ -96,7 +106,7 @@ Optional. `-s` in the terminal, or **Analyze…** in the viewer (with a model pi
 
 **Setup.** There's no key to paste anywhere. perspica uses whichever of these you have:
 
-- **Claude Code.** perspica uses your Claude Code login, so no API key is needed; if you already use it, there's nothing to set up. New to it? Install [Claude Code](https://claude.com/claude-code) and run `claude auth login`.
+- **Claude Code.** perspica uses your Claude Code login, so no API key is needed; if you already use it, there's nothing to set up. New to it? Install [Claude Code](https://claude.com/claude-code) and run `claude auth login`. Analyses and lessons run this way count toward your Claude plan's usage, like any other Claude Code request.
 - **An API key** in your environment. Add it to your shell profile (`~/.zshrc`, `~/.bashrc`) and open a new terminal:
   ```bash
   export ANTHROPIC_API_KEY=sk-ant-…     # or OPENAI_API_KEY
@@ -111,11 +121,33 @@ If none is found, **Analyze…** in the viewer shows these steps, and *Check aga
 
 The default Claude model is `claude-opus-5-5`; `--model claude-sonnet-5-5` is faster, `claude-haiku-5-5` (or the older `claude-haiku-4-5`) is a quick first pass. What's sent: the list of classified changes and the changed code, never whole files (Thorough may also read definitions and files under 200 lines from the changed files). Analyses are saved per diff in `.git/perspica/`, so reloading or running again doesn't pay for the same analysis twice; `--fresh` reruns. Up to 100,000 characters of changed code are sent (16,000 to a local model). For a bigger change, **Analyze…** says how big it is and offers to send all of it, and `--full-context` does the same in the terminal; otherwise the model is told which files it can't see.
 
+## Learn
+
+The **Learn** tab, next to Review in the viewer, picks out the concepts you need to understand this change. An architecture change comes first, then an algorithm, a protocol rule or a language feature it depends on. A small change gets one concept and a bigger one up to three. Formatting, renames and changes that need no background get "nothing to learn" instead of filler.
+
+Each concept has:
+
+- a one-line summary, and the idea in everyday terms;
+- how it works, and where it shows up in this change, with links to the code;
+- a diagram, animation or small interactive piece when one helps (often the text is enough);
+- links to the documentation it comes from;
+- a quiz of one to three questions, to check you've understood it before you approve the change.
+
+<a href="docs/media/perspica-learn-demo.mp4"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/learn-dark.jpg">
+  <img alt="Learn for pallets/flask#5818: the architecture concept 'Explicit context instead of proxies', with its summary, an everyday picture of the idea, and a before/after diagram of how the context flows through Flask's dispatch methods" src="docs/images/learn-light.jpg">
+</picture></a>
+
+<sub>Learn on [pallets/flask#5818](https://github.com/pallets/flask/pull/5818). [Watch the Learn demo (MP4)](docs/media/perspica-learn-demo.mp4): that diagram, a hands-on piece from [charmbracelet/lipgloss#591](https://github.com/charmbracelet/lipgloss/pull/591) and an animation from [encode/uvicorn#2985](https://github.com/encode/uvicorn/pull/2985).</sub>
+
+Learn uses the same setup as [LLM analysis](#llm-analysis): open the tab, pick a model, and perspica looks for concepts. Each lesson is written the first time you open its concept, and saved in `.git/perspica/` with the analysis, so it's only written once. If a lesson isn't good enough, **Rewrite…** writes it again, with a stronger model if you like. Lessons are kept in `--format html` exports, so a shared review keeps its lessons and quizzes.
+
 ## Privacy
 
-- Everything runs locally. Nothing is sent anywhere without `-s` / **Analyze…**, and with Ollama, not even then.
+- Everything initially runs locally. Nothing is sent anywhere unless you ask for it: `-s` / **Analyze…**, or **Find concepts…** in Learn (after that, opening a concept writes its lesson).
 - Agent sessions (`~/.claude/projects`, `~/.codex/sessions`) are read only for **your own** changes (uncommitted work, or commits authored with your git identity), never for someone else's PR. perspica says when it uses them; `--no-sessions` turns this off.
 - The web viewer listens on `127.0.0.1` and only answers its own page: other hosts (DNS rebinding) and other sites' requests are refused.
+- Learn's interactive pieces are written by the model, so they run in a sandboxed frame that can't reach the network or the rest of the page.
 
 ## Languages and file roles
 
@@ -159,7 +191,7 @@ Options:
   -V, --version              Print version
 ```
 
-Viewer shortcuts: `j`/`k` next/previous change · `n`/`p` next/previous file or group · `v` mark viewed and go to the next unviewed file · `f`/`i`/`r` by file / by intent / reading order · `m` show/hide mechanical changes · `u`/`s` unified/split · `/` filter · `?` all shortcuts.
+Viewer shortcuts: `j`/`k` next/previous change · `n`/`p` next/previous file or group · `v` mark viewed and go to the next unviewed file · `f`/`i`/`r` by file / by intent / reading order · `m` show/hide mechanical changes · `u`/`s` unified/split · `/` filter · `l` switch between Review and Learn · `e`/`q` explanation/quiz in Learn (`j`/`k` change concept) · `?` all shortcuts.
 
 </details>
 
