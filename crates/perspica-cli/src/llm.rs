@@ -200,6 +200,23 @@ impl LlmProvider for ClaudeCodeProvider {
     fn model_options(&self) -> Vec<ModelOption> { claude_models() }
 }
 
+/// The text of a Messages API response. Models that think put thinking blocks before the
+/// answer, so every text block counts, not just the first block.
+fn anthropic_text(parsed: &serde_json::Value) -> Result<String, String> {
+    let text: String = parsed["content"].as_array().into_iter().flatten()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .collect();
+    if !text.trim().is_empty() {
+        return Ok(text);
+    }
+    Err(match parsed["stop_reason"].as_str() {
+        Some("max_tokens") => "The model used up its output tokens before answering. Try again, or pick another model.".into(),
+        Some("refusal") => "The model declined to answer this request.".into(),
+        other => format!("No text in the Anthropic response (stop reason: {}).", other.unwrap_or("none")),
+    })
+}
+
 // --- Anthropic API (direct) ---
 
 pub struct AnthropicProvider {
@@ -236,10 +253,7 @@ impl LlmProvider for AnthropicProvider {
 
         let parsed: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("Parse response: {e}"))?;
-        let content = parsed["content"][0]["text"]
-            .as_str()
-            .ok_or("No text in Anthropic response")?;
-        Ok(content.to_string())
+        anthropic_text(&parsed)
     }
 
     async fn complete_with_tools(
@@ -365,10 +379,7 @@ impl LlmProvider for AnthropicBearerProvider {
 
         let parsed: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("Parse response: {e}"))?;
-        let content = parsed["content"][0]["text"]
-            .as_str()
-            .ok_or("No text in Anthropic (bearer) response")?;
-        Ok(content.to_string())
+        anthropic_text(&parsed)
     }
 
     fn name(&self) -> &str {
@@ -760,6 +771,14 @@ fn make_provider(provider: &str, key: &str, model: Option<&str>) -> Box<dyn LlmP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anthropic_text_skips_thinking_blocks() {
+        let r = serde_json::json!({"content": [{"type": "thinking", "thinking": ""}, {"type": "text", "text": "{\"a\":"}, {"type": "text", "text": "1}"}], "stop_reason": "end_turn"});
+        assert_eq!(anthropic_text(&r).unwrap(), "{\"a\":1}");
+        let cut = serde_json::json!({"content": [{"type": "thinking", "thinking": "…"}], "stop_reason": "max_tokens"});
+        assert!(anthropic_text(&cut).unwrap_err().contains("output tokens"));
+    }
 
     #[test]
     fn logged_out_messages() {

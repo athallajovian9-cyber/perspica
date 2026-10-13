@@ -405,8 +405,10 @@ pub fn lesson_prompt(input: &IntelInput<'_>, concept: &Concept, others: &[&str],
 
 /// The concepts, or why there are none. `paths` are the changed files.
 pub fn parse_outline(response: &str, paths: &[String], changed_lines: usize) -> Result<(Option<String>, Vec<Concept>), String> {
-    let raw: RawOutline = serde_json::from_str(intel::extract_json(response))
-        .map_err(|e| format!("Failed to parse the model's concept list: {e}"))?;
+    let (raw, _) = first_json::<RawOutline>(response).map_err(|e| {
+        eprintln!("perspica: couldn't read a concept list. It started: {}", clip(response, 300));
+        format!("Failed to parse the model's concept list: {e}")
+    })?;
     let concepts: Vec<Concept> = raw.concepts.unwrap_or_default().into_iter()
         .filter(|c| !c.title.trim().is_empty())
         .take(max_concepts(changed_lines))
@@ -442,8 +444,15 @@ pub fn parse_lesson(response: &str, model: &str, visual: &str) -> Result<Lesson,
         }
         None => (response, None),
     };
-    let raw: RawLesson = serde_json::from_str(intel::extract_json(json_part))
-        .map_err(|e| format!("Failed to parse the model's lesson: {e}"))?;
+    let (raw, after) = first_json::<RawLesson>(json_part).map_err(|e| {
+        eprintln!("perspica: couldn't read a lesson. It started: {}", clip(response, 300));
+        format!("Failed to parse the model's lesson: {e}")
+    })?;
+    // Without the marker lines, a document written after the JSON is still the piece.
+    let html = html.or_else(|| {
+        let lower = after.to_ascii_lowercase();
+        lower.find("<!doctype").or_else(|| lower.find("<html")).map(|at| strip_fence(&after[at..]))
+    });
     let explanation = raw.explanation.unwrap_or_default().trim().to_string();
     if explanation.is_empty() {
         return Err("The model's lesson had no explanation.".into());
@@ -494,12 +503,18 @@ const SOURCE_HOSTS: &[&str] = &[
 /// it (`repo_url`, which comes from GitHub, not from the model), or the project's own site (`project_host`,
 /// from the repository's settings, which a pull request can't change).
 fn allowed_link(url: &str, repo_url: Option<&str>, project_host: Option<&str>) -> bool {
+    allowed_site(url, repo_url, project_host) && well_formed(url)
+}
+
+/// Whether `url` is on one of those sites, whatever its query string. Used for where a link
+/// ends up after redirects, which the site chooses, not the model (docs sites add `?view=…`).
+fn allowed_site(url: &str, repo_url: Option<&str>, project_host: Option<&str>) -> bool {
     let Some(rest) = url.strip_prefix("https://") else { return false };
     let host = rest.split(['/', '#']).next().unwrap_or("");
     let repo = repo_url.filter(|r| r.starts_with("https://github.com/")).map(|r| r.trim_end_matches('/'));
     let in_repo = repo.is_some_and(|r| url == r || url.starts_with(&format!("{r}/")) || url.starts_with(&format!("{r}#")));
     let on_project_site = project_host.is_some_and(|p| host == p || host.ends_with(&format!(".{p}")));
-    (SOURCE_HOSTS.contains(&host) || in_repo || on_project_site) && well_formed(url)
+    SOURCE_HOSTS.contains(&host) || in_repo || on_project_site
 }
 
 /// No query string, credentials or spaces: nothing in the link can carry data somewhere.
@@ -547,7 +562,7 @@ pub async fn check_sources(lesson: &mut Lesson, repo_url: Option<&str>) {
             eprintln!("perspica: left out a lesson link that isn't on a known documentation site: {}", s.url);
             false
         } else if !client.get(&s.url).send().await
-            .is_ok_and(|r| r.status().is_success() && allowed_link(r.url().as_str(), repo_url, site.as_deref())) {
+            .is_ok_and(|r| r.status().is_success() && allowed_site(r.url().as_str(), repo_url, site.as_deref())) {
             eprintln!("perspica: left out a lesson link that didn't load: {}", s.url);
             false
         } else {
@@ -588,6 +603,15 @@ fn question(q: RawQuestion) -> Option<Question> {
     let answer = order.iter().position(|&o| o == answer)?;
     let choices = order.into_iter().map(|o| choices[o].clone()).collect();
     Some(Question { question: text, choices, answer, explanation: q.explanation.unwrap_or_default().trim().to_string() })
+}
+
+/// The first JSON object in a model's reply, and the text after it. Reading stops at the end of
+/// that object, so braces in whatever follows (an HTML piece, a note) don't get pulled in.
+fn first_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<(T, &str), String> {
+    let start = text.find('{').ok_or("no JSON object in the reply")?;
+    let mut values = serde_json::Deserializer::from_str(&text[start..]).into_iter::<T>();
+    let value = values.next().ok_or("no JSON object in the reply")?.map_err(|e| e.to_string())?;
+    Ok((value, &text[start + values.byte_offset()..]))
 }
 
 fn strip_fence(html: &str) -> &str {
@@ -710,6 +734,20 @@ mod tests {
         assert!(!ok("https://en.wikipedia.org/wiki/X?leak=code"));
         assert!(!ok("https://doc.rust-lang.org.evil.example/"));
         assert!(!ok("https://user@docs.rs/serde"));
+        // A docs site may redirect to the same page with a query string; that's still its own site.
+        assert!(allowed_site("https://learn.microsoft.com/en-us/dotnet/api/system.icomparable-1?view=net-10.0", repo, None));
+        assert!(!allowed_site("https://evil.example/?x=1", repo, None));
+    }
+
+    #[test]
+    fn lesson_with_html_but_no_markers() {
+        // The case that failed: the piece written right after the JSON, without the marker lines.
+        let r = "```json\n{\"explanation\": \"E.\", \"interactive\": {\"title\": \"T\"}, \"quiz\": []}\n```\n<!doctype html><html><body><script>const a = {b: 1};</script></body></html>";
+        let l = parse_lesson(r, "m", "diagram").unwrap();
+        assert_eq!(l.explanation, "E.");
+        assert!(l.interactive.unwrap().html.starts_with("<!doctype html>"));
+        // And trailing prose after the JSON is ignored.
+        assert!(parse_lesson("{\"explanation\": \"E.\"}\nHope this helps! {not json}", "m", "none").is_ok());
     }
 
     #[test]

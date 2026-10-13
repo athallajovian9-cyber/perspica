@@ -35,6 +35,7 @@ const S = {
     learnBusy: {},         // Learn jobs running: 'outline' or a concept id → {started, model}
     learnErrors: {},       // concept id → why its lesson couldn't be written
     quiz: {},              // concept key → {answers: {question index: choice}} (persisted per source)
+    frameFailed: {},       // concept id → why its interactive piece was hidden
     reviewScroll: 0,       // where the diff was when Learn opened
 };
 
@@ -759,7 +760,7 @@ function renderGroupList() {
         html += `<div class="toc-group${reviewed ? ' reviewed' : ''}${folded ? ' collapsed' : ''}" data-gi="${gi}">
             <div class="toc-head" data-jump-group="${gi}" title="Go to this group">
                 <span class="chev" data-group-toggle title="Show entries">▼</span><span class="num">${gi + 1}</span>
-                <span class="title${g.flow ? ' flow-title' : ''}"${g.flow ? ` style="padding-left:${Math.min(g.flow.depth, 6) * 10}px" title="${esc(g.label)} · ${esc(g.flow.file)}"` : ''}>${g.flow ? `<span class="flow-name">${g.flow.depth ? '<span class="flow-depth">└ </span>' : ''}${flowLabel(g.label)}</span><span class="flow-file">${esc(baseName(g.flow.file))}</span>` : `<span class="t">${esc(g.label)}</span>`}${g.note && !g.flow ? `<span class="note" title="${esc(g.note)}">${richText(g.note, false)}</span>` : ''}</span>
+                <span class="title${g.flow ? ' flow-title' : ''}"${g.flow ? ` style="padding-left:${Math.min(g.flow.depth, 6) * 10}px" title="${esc(g.label)} · ${esc(g.flow.file)}"` : ''}>${g.flow ? `<span class="flow-name">${g.flow.depth ? '<span class="flow-depth">└ </span>' : ''}${flowLabel(g.label)}</span><span class="flow-file">${esc(baseName(g.flow.file))}</span>` : `<span class="t">${richText(g.label, false)}</span>`}${g.note && !g.flow ? `<span class="note" title="${esc(g.note)}">${richText(g.note, false)}</span>` : ''}</span>
                 ${riskHtml(g.risk)}${g.origin === 'autonomous' ? originChip(g) : ''}
                 <span class="n" title="+${st.add} −${st.del} lines">${g.ids.length || hunks.length}</span>
             </div>
@@ -956,7 +957,7 @@ function groupHeadHtml(g, gi) {
             : `<span class="reach" title="No changed test calls this, directly or through the changed files">untested</span>`;
     }
     return `<div class="section-head group-head" data-section-toggle>
-        <span class="chev">▼</span><span class="num">${gi + 1}.</span>${depth}<span class="title">${esc(g.label)}</span>
+        <span class="chev">▼</span><span class="num">${gi + 1}.</span>${depth}<span class="title">${richText(g.label, false)}</span>
         ${f ? `<span class="flow-file">${esc(shortPath(f.file))}</span>` : ''}${reach}
         ${riskHtml(g.risk)}${originChip(g)}
         <span class="spacer"></span>${statsHtml(st)}
@@ -1773,7 +1774,7 @@ function renderConceptList() {
             : ['empty', '·', 'Lesson not written yet'];
         return `<button class="concept-row${c === cur ? ' current' : ''}" data-concept="${esc(c.id)}">
             <span class="concept-status ${cls}" title="${esc(label)}" aria-label="${esc(label)}">${icon}</span>
-            <span class="concept-main"><span class="concept-title">${esc(c.title)}</span><span class="concept-kind">${esc(c.kind)}</span></span>
+            <span class="concept-main"><span class="concept-title">${richText(c.title, false)}</span><span class="concept-kind">${esc(c.kind)}</span></span>
         </button>`;
     }).join('');
     const missing = cs.filter(c => !c.lesson && !S.learnBusy[c.id]).length;
@@ -1835,7 +1836,7 @@ function conceptPageHtml(c) {
     return `<article class="learn-page">
         <header class="learn-head">
             <span class="chip">${esc(c.kind)}</span>
-            <h2>${esc(c.title)}</h2>
+            <h2>${richText(c.title, false)}</h2>
             <p class="learn-why">${mdInline(c.why_here)}</p>
             ${alts}
         </header>
@@ -1860,7 +1861,7 @@ function lessonBodyHtml(c) {
 /** Read top to bottom by every level: the gist, the intuition, the picture, then the mechanics and this change. */
 function explainHtml(c) {
     const L = c.lesson;
-    const fig = L.interactive ? `<figure class="learn-figure">
+    const fig = L.interactive && S.frameFailed[c.id] ? frameFailedNote(c.id).outerHTML : L.interactive ? `<figure class="learn-figure">
             <figcaption>${L.interactive.kind ? `<span class="chip">${esc(L.interactive.kind)}</span>` : ''}<b>${esc(L.interactive.title)}</b>${L.interactive.caption ? `<span>${esc(L.interactive.caption)}</span>` : ''}</figcaption>
             <iframe class="learn-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" data-frame="${esc(c.id)}" title="${esc(L.interactive.title)}"></iframe>
         </figure>` : '';
@@ -1950,6 +1951,14 @@ function mdBlocks(s) {
     return out.join('');
 }
 
+/** Shown instead of an interactive piece that crashed or drew nothing. */
+function frameFailedNote(id) {
+    const el = document.createElement('div');
+    el.className = 'learn-figure-failed';
+    el.innerHTML = `<span>The interactive piece for this lesson didn't run, so it's hidden. The text below is unaffected.</span>${S.static ? '' : `<button class="link-btn" data-action="learn-rewrite" data-concept="${esc(id)}">Rewrite…</button>`}`;
+    return el;
+}
+
 /** Load each interactive piece into its frame, in the current theme's colors. */
 function mountFrames(root) {
     root?.querySelectorAll('iframe.learn-frame').forEach(f => {
@@ -1969,8 +1978,13 @@ function frameDoc(html) {
     const v = n => cs.getPropertyValue(n).trim();
     const vars = `--bg:${v('--bg-0')};--bg-alt:${v('--bg-1')};--fg:${v('--text-0')};--fg-muted:${v('--text-2')};--border:${v('--border')};--accent:${v('--accent')};--good:${v('--risk-low')};--bad:${v('--risk-high')};--warn:${v('--risk-med')};--font:${v('--font-sans')};--mono:${v('--font-mono')}`;
     const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'";
-    // Our head goes first, so the policy applies before any of the model's markup runs.
-    const head = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>:root{color-scheme:${cs.colorScheme || 'dark'};${vars}}html,body{margin:0;background:transparent;color:var(--fg);font:13px/1.45 var(--font)}</style></head>`;
+    // A piece that throws while it starts, or draws nothing, tells the page so it can be hidden. Errors
+    // after it has settled (a bug in one button, say) don't count: the rest of the piece still works.
+    const watcher = `<script>(()=>{let settled=false,told=false;const fail=r=>{if(settled||told)return;told=true;parent.postMessage({perspicaFrameFailed:String(r).slice(0,200)},'*');};
+addEventListener('error',e=>fail(e.message||'script error'));addEventListener('unhandledrejection',()=>fail('unhandled promise rejection'));
+addEventListener('load',()=>setTimeout(()=>{const b=document.body;const drawn=b&&(b.innerText.trim().length>0||[...b.querySelectorAll('svg,canvas,img')].some(el=>{const r=el.getBoundingClientRect();return r.width*r.height>100;}));if(!drawn)fail('nothing drawn');settled=true;},800));})()<\/script>`;
+    // Our head goes first, so the policy and the watcher apply before any of the model's markup runs.
+    const head = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}">${watcher}<style>:root{color-scheme:${cs.colorScheme || 'dark'};${vars}}html,body{margin:0;background:transparent;color:var(--fg);font:13px/1.45 var(--font)}</style></head>`;
     // Its own policy would stack on ours and could block its own script. A refresh could navigate the frame away.
     const body = html.replace(/^\s*<!doctype[^>]*>/i, '').replace(/<meta[^>]*http-equiv\s*=\s*["']?(refresh|content-security-policy)[^>]*>/gi, '');
     // The piece reports its height, so the frame fits it without a scrollbar.
@@ -1981,7 +1995,14 @@ addEventListener('keydown',e=>{if(e.defaultPrevented||e.metaKey||e.ctrlKey||e.al
 }
 
 function onFrameMessage(e) {
-    const fromFrame = [...document.querySelectorAll('iframe.learn-frame')].some(f => f.contentWindow === e.source);
+    const frame = [...document.querySelectorAll('iframe.learn-frame')].find(f => f.contentWindow === e.source);
+    const fromFrame = !!frame;
+    if (frame && typeof e.data?.perspicaFrameFailed === 'string') {
+        console.warn('perspica: an interactive piece failed and was hidden:', e.data.perspicaFrameFailed);
+        S.frameFailed[frame.dataset.frame] = e.data.perspicaFrameFailed;
+        frame.closest('.learn-figure')?.replaceWith(frameFailedNote(frame.dataset.frame));
+        return;
+    }
     if (fromFrame && typeof e.data?.perspicaKey === 'string' && e.data.perspicaKey.length === 1) {
         document.dispatchEvent(new KeyboardEvent('keydown', { key: e.data.perspicaKey }));
         return;
@@ -2058,7 +2079,7 @@ function rewriteLesson(id) {
     const answered = Object.keys(S.quiz[quizKey(c)]?.answers || {}).length;
     showDialog({
         title: 'Rewrite this lesson',
-        body: `<p class="muted">Writes the lesson, interactive piece and quiz for <b>${esc(c.title)}</b> again. The other concepts and their lessons stay as they are.</p>
+        body: `<p class="muted">Writes the lesson, interactive piece and quiz for <b>${richText(c.title, false)}</b> again. The other concepts and their lessons stay as they are.</p>
             <label class="field-label">Model <span class="muted">via ${esc(cap.llm)}</span></label>${modelFieldHtml('rw-model', model, false)}
             ${was ? `<p class="muted">This version is from ${esc(modelLabel(was))}.${strongerModel(was) ? '' : ' That\'s already the strongest model offered; rewriting with it gives a new take, not a better model.'}</p>` : ''}
             ${answered ? '<p class="setup-note">Your quiz answers for this concept are cleared, since the questions change.</p>' : ''}`,
@@ -2113,9 +2134,10 @@ async function runLearn(concept, model) {
             if (c) {
                 // A rewritten lesson has new questions, so old answers no longer fit.
                 if (c.lesson) { delete S.quiz[quizKey(c)]; store.set('quiz:' + sourceKey(), S.quiz); }
+                delete S.frameFailed[concept];
                 c.lesson = r.lesson;
             }
-            if (!shown()) toast(`The lesson on ${c?.title || 'a concept'} is ready.`, 'ok');
+            if (!shown()) toast(`The lesson on ${(c?.title || 'a concept').replace(/`/g, '')} is ready.`, 'ok');
         } else {
             S.data.learn = r.learn;
             S.concept = r.learn.concepts[0]?.id || null;
