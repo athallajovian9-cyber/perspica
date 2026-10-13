@@ -36,6 +36,10 @@
         </div>
         <div class="header-right">
             <span id="review-progress" class="review-progress" title="Files marked as viewed"></span>
+            <div class="pill-group" id="area-toggle" role="group" aria-label="Area">
+                <button class="pill-btn active" data-area="review" title="Review the diff (l switches)">Review</button>
+                <button class="pill-btn" data-area="learn" title="The concepts behind this change, with quizzes (l switches)">Learn<span id="learn-badge" class="pill-badge hidden"></span></button>
+            </div>
             <div class="pill-group" id="mode-toggle" role="group" aria-label="Order">
                 <button class="pill-btn active" data-mode="files" title="Order by file (f)">By file</button>
                 <button class="pill-btn" data-mode="intent" title="Order by intent (i)">By intent</button>
@@ -88,6 +92,7 @@
             </div>
             <section id="overview"></section>
             <div id="diff-scroll"></div>
+            <section id="learn-panel" aria-label="Learn"></section>
         </main>
     </div>
 
@@ -114,6 +119,8 @@
                 <div class="shortcut-row"><span><span class="kbd">u</span> <span class="kbd">s</span></span><span>Unified / split view</span></div>
                 <div class="shortcut-row"><span><span class="kbd">m</span></span><span>Show / hide mechanical changes</span></div>
                 <div class="shortcut-row"><span><span class="kbd">w</span></span><span>Wrap long lines</span></div>
+                <div class="shortcut-row"><span><span class="kbd">l</span></span><span>Switch between Review and Learn</span></div>
+                <div class="shortcut-row"><span><span class="kbd">e</span> <span class="kbd">q</span></span><span>In Learn: explanation / quiz (<span class="kbd">j</span> <span class="kbd">k</span> change concept)</span></div>
                 <div class="shortcut-row"><span><span class="kbd">b</span></span><span>Toggle sidebar</span></div>
                 <div class="shortcut-row"><span><span class="kbd">/</span></span><span>Filter</span></div>
                 <div class="shortcut-row"><span><span class="kbd">t</span></span><span>Toggle theme</span></div>

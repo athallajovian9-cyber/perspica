@@ -29,6 +29,13 @@ const S = {
     changedSinceViewed: {}, // path → true: marked viewed earlier, changed since (persisted per source)           // "check before merging" items marked done (persisted per source)
     checkOpen: false,
     askedOpen: false,
+    area: 'review',        // 'review' (the diff) | 'learn' (concepts behind it)
+    concept: null,         // Learn: the concept shown
+    learnTab: 'explain',   // Learn: 'explain' | 'quiz'
+    learnBusy: {},         // Learn jobs running: 'outline' or a concept id → {started, model}
+    learnErrors: {},       // concept id → why its lesson couldn't be written
+    quiz: {},              // concept key → {answers: {question index: choice}} (persisted per source)
+    reviewScroll: 0,       // where the diff was when Learn opened
 };
 
 // Derived indexes (rebuilt by derive()).
@@ -102,6 +109,7 @@ async function init() {
     S.groupsReviewed = store.get('groups:' + key, {});
     S.checked = store.get('checked:' + key, {});
     S.changedSinceViewed = store.get('changed:' + key, {});
+    S.quiz = store.get('quiz:' + key, {});
     derive();
     // Drop "viewed" marks for files whose diff changed since they were marked.
     for (const [path, sig] of Object.entries(S.viewed)) {
@@ -133,6 +141,7 @@ async function init() {
     setupListeners();
     setupSidebarResize();
     restoreFromUrl(hash.get('at'));
+    if (hash.get('area') === 'learn') { S.concept = hash.get('concept'); setArea('learn'); }
     // Highlight.js loads deferred; re-render visible code once it arrives.
     if (typeof hljs === 'undefined') {
         window.addEventListener('load', () => { if (typeof hljs !== 'undefined') { hlCache.clear(); renderMain(true); } }, { once: true });
@@ -161,6 +170,11 @@ function syncUrl() {
     urlTimer = setTimeout(() => {
         const k = order[S.currentHunk];
         let hash = `view=${S.mode}`;
+        if (S.area === 'learn') {
+            hash = 'area=learn' + (currentConcept() ? `&concept=${currentConcept().id}` : '');
+            if (location.hash.slice(1) !== hash) history.replaceState(null, '', '#' + hash);
+            return;
+        }
         if (k) {
             const [fi, hi] = k.split(':').map(Number);
             const h = S.data.results[fi].hunks[hi];
@@ -402,6 +416,12 @@ function renderHeader() {
         }
         if (b.dataset.mode === 'flow') b.classList.toggle('hidden', !hasFlow());
     });
+    document.querySelectorAll('#area-toggle .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.area === S.area));
+    const lp = learnProgress();
+    const badge = document.getElementById('learn-badge');
+    badge.classList.toggle('hidden', !lp.total && !Object.keys(S.learnBusy).length);
+    badge.textContent = Object.keys(S.learnBusy).length ? '…' : `${lp.passed}/${lp.total}`;
+    badge.title = lp.total ? `${lp.passed} of ${lp.total} concept quizzes passed` : '';
     document.querySelectorAll('#view-toggle .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
     document.getElementById('noise-toggle').checked = S.hideNoise;
     document.getElementById('wrap-toggle').checked = S.wrap;
@@ -610,6 +630,7 @@ function locLink(path, line) {
 // --- Sidebar ---
 function renderSidebar() {
     const el = document.getElementById('toc-content');
+    if (S.area === 'learn') { el.innerHTML = renderConceptList(); return; }
     document.querySelectorAll('.sidebar-tab').forEach(b => {
         b.classList.toggle('active', b.dataset.tab === S.tab);
         if (b.dataset.tab === 'changes') b.innerHTML = `Changes<span class="count">${changeListCount()}</span>`;
@@ -1493,15 +1514,18 @@ function jumpToGroup(gi, instant = false) {
 
 // --- LLM analysis ---
 /** No LLM yet: how to set one up. Keys stay in the user's environment; the viewer never asks for one. */
-function showSetup(note = '') {
+/** How to set up an LLM. `forLearn`: opened from Learn, which continues there once one is found. */
+function showSetup(note = '', forLearn = false) {
     const setup = S.data.capabilities?.llm_setup || {};
     const cmd = c => `<div class="cmd"><code>${esc(c)}</code><button class="copy-btn" data-copy="${esc(c)}" title="Copy" aria-label="Copy">${IC.copy}</button></div>`;
     const claude = setup.claude === 'logged_out'
         ? `<li><b>Claude Code</b> is installed but not logged in. Log in, then check again:${cmd('claude auth login')}</li>`
         : `<li><b><a href="https://claude.com/claude-code" target="_blank" rel="noopener">Claude Code</a></b>: perspica uses its login, no API key needed. Install it and log in, then check again:${cmd('claude auth login')}</li>`;
     showDialog({
-        title: 'Set up the analysis',
-        body: `<p class="muted">Optional. With an LLM, perspica groups the changes by what they're for, rates how risky each group is and writes a summary. Everything else works without one.</p>
+        title: forLearn ? 'Set up an LLM for Learn' : 'Set up the analysis',
+        body: `<p class="muted">${forLearn
+            ? 'Learn needs an LLM: it finds the concepts behind the change and writes the lessons and quizzes. The rest of perspica works without one.'
+            : 'Optional. With an LLM, perspica groups the changes by what they\'re for, rates how risky each group is and writes a summary. Everything else works without one.'}</p>
             <ol class="setup">
                 ${claude}
                 <li><b>An API key</b>: add it to your shell profile (<code>~/.zshrc</code> or <code>~/.bashrc</code>), open a new terminal and run perspica again:${cmd('export ANTHROPIC_API_KEY=sk-ant-…')}<span class="muted">or <code>OPENAI_API_KEY</code></span></li>
@@ -1510,24 +1534,30 @@ function showSetup(note = '') {
             ${note ? `<p class="setup-note">${esc(note)}</p>` : ''}`,
         actions: [
             { label: 'Close' },
-            { label: 'Check again', primary: true, busy: 'Checking…', onClick: checkForLlm },
+            { label: 'Check again', primary: true, busy: 'Checking…', onClick: () => checkForLlm(forLearn) },
         ],
     });
 }
 
-async function checkForLlm() {
+async function checkForLlm(forLearn = false) {
     try {
         const resp = await fetch('/api/llm/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const cap = await resp.json();
         if (!resp.ok) throw new Error(cap.error || `HTTP ${resp.status}`);
         S.data.capabilities = cap;
         renderHeader();
-        if (!cap.llm) { showSetup(cap.llm_setup?.claude === 'logged_out' ? 'Claude Code still isn\'t logged in.' : 'Still no LLM found. A new API key needs a restart of perspica.'); return; }
+        if (!cap.llm) { showSetup(cap.llm_setup?.claude === 'logged_out' ? 'Claude Code still isn\'t logged in.' : 'Still no LLM found. A new API key needs a restart of perspica.', forLearn); return; }
         renderOverview(); renderSidebar();
+        if (forLearn) {
+            toast(`Found ${cap.llm}.`);
+            const c = currentConcept();
+            if (c && !c.lesson) runLearn(c.id); else if (!learnData()) startLearn(); else renderLearn();
+            return;
+        }
         toast(`Found ${cap.llm}. Ready to analyze.`);
         startAnalysis();
     } catch (e) {
-        showSetup(`Couldn't check: ${e.message}`);
+        showSetup(`Couldn't check: ${e.message}`, forLearn);
     }
 }
 
@@ -1539,9 +1569,7 @@ function startAnalysis() {
     const saved = store.get('analysis', {});
     const model = saved.model && (models.some(m => m.id === saved.model) || !models.length) ? saved.model : cap.model;
     const depth = saved.depth === 'thorough' ? 'thorough' : 'standard';
-    const modelField = models.length
-        ? `<select id="an-model" class="field">${models.map(m => `<option value="${esc(m.id)}"${m.id === model ? ' selected' : ''}>${esc(m.label)} · ${esc(m.note)}</option>`).join('')}${models.some(m => m.id === cap.model) ? '' : `<option value="${esc(cap.model)}" selected>${esc(cap.model)} (from --model)</option>`}</select>`
-        : `<input id="an-model" class="field mono" value="${esc(model || '')}" spellcheck="false" aria-label="Model">`;
+    const modelField = modelFieldHtml('an-model', model);
     const reqs = S.data.source?.sessions?.requirements?.length || 0;
     // When it's bigger than what's sent by default, say how big and offer to send all of it.
     const over = cap.context_budget && cap.context_chars > cap.context_budget;
@@ -1584,6 +1612,15 @@ function startAnalysis() {
     };
     document.getElementById('an-model')?.addEventListener('change', updateTimes);
     updateTimes();
+}
+
+/** The model picker: the provider's suggestions, or a text field when it has none. */
+function modelFieldHtml(id, model, notes = true) {
+    const cap = S.data.capabilities || {};
+    const models = cap.models || [];
+    return models.length
+        ? `<select id="${id}" class="field">${models.map(m => `<option value="${esc(m.id)}"${m.id === model ? ' selected' : ''}>${esc(m.label)}${notes ? ` · ${esc(m.note)}` : ''}</option>`).join('')}${models.some(m => m.id === cap.model) ? '' : `<option value="${esc(cap.model)}" selected>${esc(cap.model)} (from --model)</option>`}</select>`
+        : `<input id="${id}" class="field mono" value="${esc(model || '')}" spellcheck="false" aria-label="Model">`;
 }
 
 /**
@@ -1637,7 +1674,7 @@ async function runAnalysis({ model, depth, full }) {
         toast('Analysis failed: ' + truncate(e.message, 300), 'error', 9000);
     } finally {
         clearInterval(timer);
-        setFaviconBusy(false);
+        if (!Object.keys(S.learnBusy).length) setFaviconBusy(false);
         S.running = false;
         btn.disabled = false;
         renderHeader(); renderOverview();
@@ -1654,6 +1691,449 @@ function ago(unix) {
 
 function modelLabel(id) {
     return (S.data.capabilities?.models || []).find(m => m.id === id)?.label || id || 'the model';
+}
+
+// --- Learn: the concepts behind the change, with lessons and quizzes ---
+/** Share of a quiz answered right to count the concept as understood. */
+const LEARN_PASS = 0.8;
+/** Bounds for an interactive piece's height, which it reports itself. */
+const FRAME_MIN_H = 120, FRAME_MAX_H = 1000;
+
+function learnData() { return S.data.learn || null; }
+function conceptById(id) { return learnData()?.concepts?.find(c => c.id === id); }
+function currentConcept() {
+    const cs = learnData()?.concepts || [];
+    return cs.find(c => c.id === S.concept) || cs[0] || null;
+}
+/** Quiz answers are kept by id and title, so a new concept list doesn't inherit old answers. */
+function quizKey(c) { return c.id + '|' + c.title; }
+function quizScore(c) {
+    const qs = c.lesson?.quiz || [];
+    const ans = S.quiz[quizKey(c)]?.answers || {};
+    const answered = qs.filter((_, i) => ans[i] !== undefined).length;
+    const right = qs.filter((q, i) => ans[i] === q.answer).length;
+    return { total: qs.length, answered, right, passed: qs.length > 0 && answered === qs.length && right / qs.length >= LEARN_PASS };
+}
+function learnProgress() {
+    const cs = learnData()?.concepts || [];
+    return { total: cs.length, passed: cs.filter(c => quizScore(c).passed).length };
+}
+
+function setArea(area) {
+    if (area === S.area) return;
+    if (area === 'learn') S.reviewScroll = window.scrollY;
+    S.area = area;
+    document.body.classList.toggle('area-learn', area === 'learn');
+    renderHeader(); renderSidebar();
+    if (area === 'learn') { renderLearn(); window.scrollTo({ top: 0 }); }
+    else { renderOverview(); window.scrollTo({ top: S.reviewScroll }); }
+    syncUrl();
+}
+
+function showConcept(id) {
+    if (!conceptById(id)) return;
+    S.concept = id;
+    S.learnTab = 'explain';
+    renderSidebar(); renderLearn();
+    window.scrollTo({ top: 0 });
+    syncUrl();
+}
+
+function stepConcept(dir) {
+    const cs = learnData()?.concepts || [];
+    if (!cs.length) return;
+    const i = cs.indexOf(currentConcept());
+    showConcept(cs[(i + dir + cs.length) % cs.length].id);
+}
+
+function setLearnTab(tab) {
+    const c = currentConcept();
+    if (!c?.lesson || tab === S.learnTab) return;
+    S.learnTab = tab;
+    renderLearn();
+}
+
+function renderConceptList() {
+    const l = learnData();
+    const cs = l?.concepts || [];
+    const lp = learnProgress();
+    const hint = !l ? 'The ideas this change relies on, each with a lesson and a quiz.'
+        : !cs.length ? 'Nothing to learn in this change.'
+        : `Understood ${lp.passed} of ${lp.total}. A concept counts once you pass its quiz.`;
+    const caption = `<div class="toc-caption"><div><b>Learn</b>${cs.length ? ` · ${cs.length} concept${pl(cs.length)}` : ''}</div><div class="hint">${hint}</div></div>`;
+    const cur = currentConcept();
+    const rows = cs.map(c => {
+        const sc = quizScore(c);
+        const [cls, icon, label] = S.learnBusy[c.id] ? ['busy', '…', 'Writing the lesson']
+            : sc.passed ? ['passed', '✓', 'Quiz passed']
+            : c.lesson ? ['ready', '○', sc.answered ? `Quiz: ${sc.right} of ${sc.total} right` : 'Lesson ready']
+            : ['empty', '·', 'Lesson not written yet'];
+        return `<button class="concept-row${c === cur ? ' current' : ''}" data-concept="${esc(c.id)}">
+            <span class="concept-status ${cls}" title="${esc(label)}" aria-label="${esc(label)}">${icon}</span>
+            <span class="concept-main"><span class="concept-title">${esc(c.title)}</span><span class="concept-kind">${esc(c.kind)}</span></span>
+        </button>`;
+    }).join('');
+    const missing = cs.filter(c => !c.lesson && !S.learnBusy[c.id]).length;
+    const actions = S.static || !l ? '' : `<div class="concept-actions">
+        ${missing > 1 ? `<button class="plain-btn" data-action="learn-all">Write all ${missing} lessons</button>` : ''}
+        <button class="link-btn" data-action="learn-start">Look for concepts again…</button>
+    </div>`;
+    return caption + `<div class="concept-list">${rows}</div>` + actions;
+}
+
+function renderLearn() {
+    const panel = document.getElementById('learn-panel');
+    const l = learnData();
+    if (S.learnBusy.outline) {
+        panel.innerHTML = `<div class="learn-page">${busyHtml('Looking for concepts', S.learnBusy.outline)}</div>`;
+        return;
+    }
+    if (!l) { panel.innerHTML = learnIntroHtml(); return; }
+    if (!l.concepts?.length) {
+        panel.innerHTML = `<div class="learn-page learn-empty">
+            <h2>Nothing to learn here</h2>
+            <p>${richText(l.nothing || 'Nothing in this change needs background to review.')}</p>
+            <p class="muted">Checked by ${esc(modelLabel(l.model))} ${ago(l.saved_at)}.</p>
+            ${S.static ? '' : '<button class="plain-btn" data-action="learn-start">Look again…</button>'}
+        </div>`;
+        return;
+    }
+    const c = currentConcept();
+    S.concept = c.id;
+    panel.innerHTML = conceptPageHtml(c);
+    mountFrames(panel);
+    // Lessons are written the first time their concept is opened.
+    if (!c.lesson && !S.learnBusy[c.id] && !S.learnErrors[c.id] && !S.static && S.data.capabilities?.llm) runLearn(c.id);
+}
+
+function learnIntroHtml() {
+    return `<div class="learn-page learn-empty">
+        <h2>Learn the ideas behind this change</h2>
+        <p>perspica finds the technical concepts this change relies on, like an architecture choice, an algorithm, a concurrency pattern or a formula. It explains each one with words and an interactive piece, ties it to this change's code, and quizzes you on it. Use it before you approve a change, or to understand one afterwards. If the change needs no background, it says so.</p>
+        ${S.static ? '<p class="muted">No lessons were written before this page was saved.</p>'
+            : '<button class="accent-btn primary" data-action="learn-start">Find concepts…</button>'}
+    </div>`;
+}
+
+function busyHtml(what, busy) {
+    return `<div class="learn-busy"><span class="spinner" aria-hidden="true"></span>
+        <span>${esc(what)} with ${esc(modelLabel(busy.model))}… <span data-since="${busy.started}">${Math.round((Date.now() - busy.started) / 1000)}s</span></span>
+        <span class="muted">Usually 1 to 3 minutes. You can keep reviewing meanwhile.</span></div>`;
+}
+
+function conceptPageHtml(c) {
+    const sc = quizScore(c);
+    const n = c.lesson?.quiz?.length || 0;
+    const tabs = c.lesson ? `<div class="pill-group learn-tabs" role="tablist" aria-label="Lesson">
+            <button class="pill-btn${S.learnTab === 'explain' ? ' active' : ''}" data-learn-tab="explain" role="tab" title="Explanation (e)">Explain</button>
+            <button class="pill-btn${S.learnTab === 'quiz' ? ' active' : ''}" data-learn-tab="quiz" role="tab" title="Quiz (q)"${n ? '' : ' disabled'}>Quiz${n ? ` <span class="count">${sc.answered ? `${sc.right}/${n}` : n}</span>` : ''}</button>
+        </div>` : '';
+    const alts = c.chosen_over?.length ? `<div class="learn-alts"><div class="ov-label">Likely chosen over</div><ul>${c.chosen_over.map(a => `<li>${mdInline(a)}</li>`).join('')}</ul></div>` : '';
+    return `<article class="learn-page">
+        <header class="learn-head">
+            <span class="chip">${esc(c.kind)}</span>
+            <h2>${esc(c.title)}</h2>
+            <p class="learn-why">${mdInline(c.why_here)}</p>
+            ${alts}
+        </header>
+        ${tabs}
+        <div class="learn-body">${lessonBodyHtml(c)}</div>
+    </article>`;
+}
+
+function lessonBodyHtml(c) {
+    if (S.learnBusy[c.id]) return busyHtml('Writing the lesson', S.learnBusy[c.id]);
+    if (!c.lesson) {
+        if (S.static) return '<p class="muted">This lesson wasn\'t written before the page was saved.</p>';
+        const err = S.learnErrors[c.id];
+        return `<div class="learn-pending">
+            ${err ? `<p class="learn-error">Couldn't write the lesson: ${esc(truncate(err, 400))}</p>` : ''}
+            <button class="accent-btn primary" data-action="learn-lesson" data-concept="${esc(c.id)}">${err ? 'Try again' : 'Write the lesson'}</button>
+        </div>`;
+    }
+    return S.learnTab === 'quiz' && c.lesson.quiz?.length ? quizHtml(c) : explainHtml(c);
+}
+
+/** Read top to bottom by every level: the gist, the intuition, the picture, then the mechanics and this change. */
+function explainHtml(c) {
+    const L = c.lesson;
+    const fig = L.interactive ? `<figure class="learn-figure">
+            <figcaption>${L.interactive.kind ? `<span class="chip">${esc(L.interactive.kind)}</span>` : ''}<b>${esc(L.interactive.title)}</b>${L.interactive.caption ? `<span>${esc(L.interactive.caption)}</span>` : ''}</figcaption>
+            <iframe class="learn-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" data-frame="${esc(c.id)}" title="${esc(L.interactive.title)}"></iframe>
+        </figure>` : '';
+    const section = (label, html) => html ? `<section class="learn-section"><div class="ov-label">${label}</div>${html}</section>` : '';
+    const points = L.key_points?.length ? `<ul>${L.key_points.map(k => `<li>${mdInline(k)}</li>`).join('')}</ul>` : '';
+    const here = L.in_this_change ? `<div class="learn-card in-change"><div class="ov-label">In this change</div>${mdBlocks(L.in_this_change)}</div>` : '';
+    const next = L.quiz?.length ? `<button class="accent-btn" data-learn-tab="quiz">Quiz yourself (${L.quiz.length} question${pl(L.quiz.length)})</button>` : '';
+    return `${L.tldr ? `<p class="learn-tldr">${mdInline(L.tldr)}</p>` : ''}
+        ${L.intuition ? `<div class="learn-text learn-intuition">${mdBlocks(L.intuition)}</div>` : ''}
+        ${fig}
+        ${section(L.intuition ? 'How it works' : '', `<div class="learn-text">${mdBlocks(L.explanation)}</div>`)}
+        ${here}${section('Key points', points)}
+        ${L.sources?.length ? section('Read more', `<ul class="learn-sources">${L.sources.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.title)}</a> <span class="muted">${esc(new URL(x.url).host)}</span></li>`).join('')}</ul>`) : ''}
+        <div class="learn-foot">${next}<span class="muted">Written by ${esc(modelLabel(L.model))} ${ago(L.saved_at)}. Model-written, so check it against the code.</span>
+            ${S.static ? '' : `<button class="link-btn" data-action="learn-rewrite" data-concept="${esc(c.id)}">Rewrite…</button>`}</div>`;
+}
+
+function quizHtml(c) {
+    const qs = c.lesson.quiz;
+    const ans = S.quiz[quizKey(c)]?.answers || {};
+    const sc = quizScore(c);
+    const items = qs.map((q, i) => {
+        const picked = ans[i];
+        const done = picked !== undefined;
+        const choices = q.choices.map((ch, k) => {
+            const cls = !done ? '' : k === q.answer ? ' correct' : k === picked ? ' wrong' : ' faded';
+            // Plain code, not links: a link button can't sit inside the choice's button.
+            return `<button class="quiz-choice${cls}" data-quiz="${i}:${k}"${done ? ' disabled' : ''}><span class="quiz-letter">${'ABCDE'[k]}</span><span>${mdInline(ch, false)}</span></button>`;
+        }).join('');
+        const verdict = !done ? '' : `<div class="quiz-explain ${picked === q.answer ? 'right' : 'wrong'}"><b>${picked === q.answer ? 'Right.' : `Not quite. The answer is ${'ABCDE'[q.answer]}.`}</b> ${mdInline(q.explanation)}</div>`;
+        return `<div class="quiz-q"><div class="quiz-n">Question ${i + 1} of ${qs.length}</div><p class="quiz-text">${mdInline(q.question)}</p><div class="quiz-choices">${choices}</div>${verdict}</div>`;
+    }).join('');
+    const cs = learnData().concepts;
+    const more = cs.length > 1 ? '<button class="plain-btn" data-action="learn-next">Next concept</button>' : '';
+    const result = sc.answered < sc.total ? '' : `<div class="quiz-result${sc.passed ? ' passed' : ''}">
+        <b>${sc.right} of ${sc.total} right.</b> ${sc.passed ? 'Counted as understood.' : `You need ${Math.ceil(sc.total * LEARN_PASS)} to count it as understood. Re-read the explanation, then start over.`}
+        <span class="quiz-actions"><button class="plain-btn" data-quiz-reset>Start over</button>${more}</span></div>`;
+    // A weak quiz is a reason to rewrite too, so the footer is here as well.
+    const foot = `<div class="learn-foot"><span class="muted">Written by ${esc(modelLabel(c.lesson.model))} ${ago(c.lesson.saved_at)}.</span>
+        ${S.static ? '' : `<button class="link-btn" data-action="learn-rewrite" data-concept="${esc(c.id)}">Rewrite…</button>`}</div>`;
+    return `<div class="quiz">${items}${result}</div>${foot}`;
+}
+
+function answerQuiz(qi, choice) {
+    const c = currentConcept();
+    if (!c?.lesson?.quiz?.[qi]) return;
+    const entry = S.quiz[quizKey(c)] || (S.quiz[quizKey(c)] = { answers: {} });
+    if (entry.answers[qi] !== undefined) return;
+    entry.answers[qi] = choice;
+    store.set('quiz:' + sourceKey(), S.quiz);
+    const y = window.scrollY;
+    renderLearn(); renderSidebar(); renderHeader();
+    window.scrollTo(0, y);
+}
+
+function resetQuiz() {
+    const c = currentConcept();
+    if (!c) return;
+    delete S.quiz[quizKey(c)];
+    store.set('quiz:' + sourceKey(), S.quiz);
+    renderLearn(); renderSidebar(); renderHeader();
+    window.scrollTo({ top: 0 });
+}
+
+/** Model-written inline text: `code` (linked to the change it names, unless `links` is false) and **bold**. */
+function mdInline(s, links = true) {
+    return richText(s || '', links).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+}
+
+/** Model-written text: paragraphs split by blank lines, and "- " or "1. " lists, which may follow a paragraph line directly. */
+function mdBlocks(s) {
+    const out = [];
+    for (const block of String(s || '').split(/\n\s*\n/)) {
+        let para = [], list = null;
+        const flushPara = () => { if (para.length) out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; };
+        const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${mdInline(i)}</li>`).join('')}</${list.tag}>`); list = null; };
+        for (const line of block.split('\n').map(l => l.trim()).filter(Boolean)) {
+            const m = line.match(/^(?:([-*•])|(\d+)[.)]) (.*)$/);
+            if (!m) { flushList(); para.push(line); continue; }
+            const tag = m[1] ? 'ul' : 'ol';
+            flushPara();
+            if (list?.tag !== tag) { flushList(); list = { tag, items: [] }; }
+            list.items.push(m[3]);
+        }
+        flushPara(); flushList();
+    }
+    return out.join('');
+}
+
+/** Load each interactive piece into its frame, in the current theme's colors. */
+function mountFrames(root) {
+    root?.querySelectorAll('iframe.learn-frame').forEach(f => {
+        const html = conceptById(f.dataset.frame)?.lesson?.interactive?.html;
+        if (html) f.srcdoc = frameDoc(html);
+    });
+}
+
+/**
+ * The page for a model-written piece. The frame is sandboxed without same-origin
+ * access, so its script can't reach this page or perspica's local API. The policy
+ * below also blocks every request, so nothing it shows can be sent anywhere. That
+ * matters because the code under review can steer what the model writes.
+ */
+function frameDoc(html) {
+    const cs = getComputedStyle(document.documentElement);
+    const v = n => cs.getPropertyValue(n).trim();
+    const vars = `--bg:${v('--bg-0')};--bg-alt:${v('--bg-1')};--fg:${v('--text-0')};--fg-muted:${v('--text-2')};--border:${v('--border')};--accent:${v('--accent')};--good:${v('--risk-low')};--bad:${v('--risk-high')};--warn:${v('--risk-med')};--font:${v('--font-sans')};--mono:${v('--font-mono')}`;
+    const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'";
+    // Our head goes first, so the policy applies before any of the model's markup runs.
+    const head = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><style>:root{color-scheme:${cs.colorScheme || 'dark'};${vars}}html,body{margin:0;background:transparent;color:var(--fg);font:13px/1.45 var(--font)}</style></head>`;
+    // Its own policy would stack on ours and could block its own script. A refresh could navigate the frame away.
+    const body = html.replace(/^\s*<!doctype[^>]*>/i, '').replace(/<meta[^>]*http-equiv\s*=\s*["']?(refresh|content-security-policy)[^>]*>/gi, '');
+    // The piece reports its height, so the frame fits it without a scrollbar.
+    // It also passes on perspica's shortcut keys it didn't use itself, so they work after a click inside it.
+    const sizer = `<script>(()=>{const post=()=>parent.postMessage({perspicaFrameHeight:Math.ceil(document.documentElement.getBoundingClientRect().height)},'*');new ResizeObserver(post).observe(document.documentElement);addEventListener('load',post);post();
+addEventListener('keydown',e=>{if(e.defaultPrevented||e.metaKey||e.ctrlKey||e.altKey||/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)||!'lejkqtb?'.includes(e.key))return;parent.postMessage({perspicaKey:e.key},'*');});})()<\/script>`;
+    return head + body + sizer;
+}
+
+function onFrameMessage(e) {
+    const fromFrame = [...document.querySelectorAll('iframe.learn-frame')].some(f => f.contentWindow === e.source);
+    if (fromFrame && typeof e.data?.perspicaKey === 'string' && e.data.perspicaKey.length === 1) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: e.data.perspicaKey }));
+        return;
+    }
+    const h = e.data?.perspicaFrameHeight;
+    if (typeof h !== 'number' || !isFinite(h)) return;
+    for (const f of document.querySelectorAll('iframe.learn-frame')) {
+        if (f.contentWindow === e.source) f.style.height = Math.max(FRAME_MIN_H, Math.min(FRAME_MAX_H, h)) + 'px';
+    }
+}
+
+/** Ask which model to use, then find the concepts. */
+function startLearn() {
+    if (S.static || S.learnBusy.outline) return;
+    const cap = S.data.capabilities || {};
+    if (!cap.llm) { showSetup('', true); return; }
+    const l = learnData();
+    const saved = store.get('learn', {});
+    const models = cap.models || [];
+    const usual = saved.model && (models.some(m => m.id === saved.model) || !models.length) ? saved.model : cap.model;
+    const model = l ? strongerModel(l.model) || usual : usual;
+    const reqs = S.data.source?.sessions?.requirements?.length || 0;
+    const over = cap.context_budget && cap.context_chars > cap.context_budget;
+    const tokens = n => `about ${Math.round(n / 4000)}K tokens`;
+    showDialog({
+        title: l ? 'Look for concepts again' : 'Find concepts in this change',
+        body: `<p class="muted">Lists the technical concepts this change relies on, or says there are none. Each concept's lesson, interactive piece and quiz are written the first time you open it, one request each.</p>
+            ${l?.concepts?.some(c => c.lesson) ? '<p class="setup-note">This replaces the current concepts and their lessons.</p>' : ''}
+            ${l ? `<p class="muted">The current list is from ${esc(modelLabel(l.model))}. A stronger model may find a better one.</p>` : ''}
+            <label class="field-label">Model <span class="muted">via ${esc(cap.llm)}</span></label>${modelFieldHtml('ln-model', model, false)}
+            <p class="muted">A stronger model writes better interactive pieces.</p>
+            ${over ? `<div class="size-note"><p>This change has <b>${cap.context_chars.toLocaleString()}</b> characters of changed code. By default ${esc(cap.llm)} gets the first ${cap.context_budget.toLocaleString()} (${tokens(cap.context_budget)}).</p>
+                <label class="check"><input type="checkbox" id="ln-full"${saved.full ? ' checked' : ''}> Send all of it (${tokens(cap.context_chars)}), for the lessons too</label></div>` : ''}
+            <details class="sent"><summary>What gets sent to ${esc(cap.llm)}</summary><ul>
+                <li>the classified changes (names, locations) and the changed code, never whole files</li>
+                <li>for each lesson, the changed code of the files that concept appears in</li>
+                ${reqs ? `<li>your ${reqs} prompt${pl(reqs)} from the coding-agent session that made the change (turn off with <code>--no-sessions</code>)</li>` : ''}
+                ${S.data.source?.pr_title || S.data.source?.label?.includes('..') ? '<li>the PR description or commit messages</li>' : ''}
+            </ul></details>`,
+        actions: [
+            { label: 'Cancel' },
+            { label: l ? 'Look again' : 'Find concepts', primary: true, onClick: () => {
+                const m = document.getElementById('ln-model')?.value.trim() || cap.model;
+                store.set('learn', { model: m, full: !!document.getElementById('ln-full')?.checked });
+                runLearn(null);
+            } },
+        ],
+    });
+}
+
+/** How capable a Claude model is, for suggesting a step up. Other providers' models aren't ranked. */
+function modelRank(id) {
+    const m = String(id || '').toLowerCase();
+    return /fable|mythos/.test(m) ? 4 : /opus/.test(m) ? 3 : /sonnet/.test(m) ? 2 : /haiku/.test(m) ? 1 : 0;
+}
+
+/** The next stronger model the provider offers, or none when `id` is already the strongest. */
+function strongerModel(id) {
+    const rank = modelRank(id);
+    if (!rank) return null;
+    const up = (S.data.capabilities?.models || []).filter(m => modelRank(m.id) > rank);
+    up.sort((a, b) => modelRank(a.id) - modelRank(b.id));
+    return up[0]?.id || null;
+}
+
+/** Ask which model to rewrite one lesson with. Only that lesson is replaced. */
+function rewriteLesson(id) {
+    const c = conceptById(id);
+    if (!c || S.static || S.learnBusy[id]) return;
+    const cap = S.data.capabilities || {};
+    if (!cap.llm) { showSetup('', true); return; }
+    const was = c.lesson?.model;
+    const model = strongerModel(was) || was || cap.model;
+    const answered = Object.keys(S.quiz[quizKey(c)]?.answers || {}).length;
+    showDialog({
+        title: 'Rewrite this lesson',
+        body: `<p class="muted">Writes the lesson, interactive piece and quiz for <b>${esc(c.title)}</b> again. The other concepts and their lessons stay as they are.</p>
+            <label class="field-label">Model <span class="muted">via ${esc(cap.llm)}</span></label>${modelFieldHtml('rw-model', model, false)}
+            ${was ? `<p class="muted">This version is from ${esc(modelLabel(was))}.${strongerModel(was) ? '' : ' That\'s already the strongest model offered; rewriting with it gives a new take, not a better model.'}</p>` : ''}
+            ${answered ? '<p class="setup-note">Your quiz answers for this concept are cleared, since the questions change.</p>' : ''}`,
+        actions: [
+            { label: 'Cancel' },
+            { label: 'Rewrite', primary: true, onClick: () => {
+                const m = document.getElementById('rw-model')?.value.trim() || cap.model;
+                delete S.learnErrors[id];
+                runLearn(id, m);
+            } },
+        ],
+    });
+}
+
+function writeLesson(id) {
+    if (!S.data.capabilities?.llm) { showSetup('', true); return; }
+    delete S.learnErrors[id];
+    runLearn(id);
+}
+
+/** Write the lessons not written yet, two at a time. */
+async function writeAllLessons() {
+    if (!S.data.capabilities?.llm) { showSetup('', true); return; }
+    const todo = (learnData()?.concepts || []).filter(c => !c.lesson && !S.learnBusy[c.id]).map(c => c.id);
+    const worker = async () => { while (todo.length) await runLearn(todo.shift()); };
+    await Promise.all([worker(), worker()]);
+}
+
+let learnTicker = 0;
+/** Find the concepts (no `concept`), or write one concept's lesson. */
+/** `model` overrides the one chosen when the concepts were found (for a rewrite). */
+async function runLearn(concept, model) {
+    const job = concept || 'outline';
+    if (S.learnBusy[job]) return;
+    const saved = store.get('learn', {});
+    model = model || saved.model || S.data.capabilities?.model;
+    S.learnBusy[job] = { started: Date.now(), model };
+    delete S.learnErrors[job];
+    setFaviconBusy(true);
+    if (!learnTicker) learnTicker = setInterval(() => {
+        document.querySelectorAll('[data-since]').forEach(el => { el.textContent = Math.round((Date.now() - +el.dataset.since) / 1000) + 's'; });
+    }, 1000);
+    const shown = () => S.area === 'learn' && (job === 'outline' || currentConcept()?.id === concept);
+    renderHeader();
+    if (S.area === 'learn') { renderSidebar(); if (shown()) renderLearn(); }
+    try {
+        const resp = await fetch('/api/learn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, full: !!saved.full, concept }) });
+        const r = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        if (!resp.ok || r.error) throw new Error(r.error || `HTTP ${resp.status}`);
+        if (concept) {
+            const c = conceptById(concept);
+            if (c) {
+                // A rewritten lesson has new questions, so old answers no longer fit.
+                if (c.lesson) { delete S.quiz[quizKey(c)]; store.set('quiz:' + sourceKey(), S.quiz); }
+                c.lesson = r.lesson;
+            }
+            if (!shown()) toast(`The lesson on ${c?.title || 'a concept'} is ready.`, 'ok');
+        } else {
+            S.data.learn = r.learn;
+            S.concept = r.learn.concepts[0]?.id || null;
+            S.learnTab = 'explain';
+            const n = r.learn.concepts.length;
+            toast(n ? `Found ${n} concept${pl(n)} in ${r.seconds}s.` : 'Nothing to learn in this change.', 'ok');
+        }
+    } catch (e) {
+        if (concept) S.learnErrors[concept] = e.message;
+        else toast('Couldn\'t find concepts: ' + truncate(e.message, 300), 'error', 9000);
+    } finally {
+        const wasShown = shown();
+        delete S.learnBusy[job];
+        if (!Object.keys(S.learnBusy).length) {
+            clearInterval(learnTicker); learnTicker = 0;
+            if (!S.running) setFaviconBusy(false);
+        }
+        renderHeader();
+        // Re-render the page only when it shows this job, so a running interactive piece isn't reset.
+        if (S.area === 'learn') { renderSidebar(); if (wasShown) renderLearn(); }
+    }
 }
 
 // --- Mode / view switches ---
@@ -1717,11 +2197,14 @@ function toggleTheme() {
     const next = cur === 'dark' ? 'light' : 'dark';
     root.setAttribute('data-theme', next);
     try { localStorage.setItem('perspica-theme', next); } catch {}
+    if (S.area === 'learn') mountFrames(document.getElementById('learn-panel'));
 }
 
 // --- Events ---
 function setupListeners() {
     document.getElementById('mode-toggle').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+    document.getElementById('area-toggle').addEventListener('click', e => { const b = e.target.closest('[data-area]'); if (b) setArea(b.dataset.area); });
+    window.addEventListener('message', onFrameMessage);
     document.getElementById('view-toggle').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) setView(b.dataset.view); });
     document.getElementById('noise-toggle').addEventListener('change', e => setHideNoise(e.target.checked));
     document.getElementById('analyze-btn').addEventListener('click', () => { if (!S.static) startAnalysis(); });
@@ -1761,8 +2244,20 @@ function setupListeners() {
             else if (act === 'toggle-check') { S.checkOpen = !S.checkOpen; renderOverview(); }
             else if (act === 'toggle-asked') { S.askedOpen = !S.askedOpen; renderOverview(); }
             else if (act === 'tab-changes') { S.tab = 'changes'; renderSidebar(); if (isMobile()) document.body.classList.add('sidebar-open'); }
+            else if (act === 'learn-start') startLearn();
+            else if (act === 'learn-lesson') writeLesson(a.dataset.concept);
+            else if (act === 'learn-rewrite') rewriteLesson(a.dataset.concept);
+            else if (act === 'learn-all') writeAllLessons();
+            else if (act === 'learn-next') stepConcept(1);
             return;
         }
+        const lc = t.closest('[data-concept]');
+        if (lc) { showConcept(lc.dataset.concept); closeMobileSidebar(); return; }
+        const lt = t.closest('[data-learn-tab]');
+        if (lt) { setLearnTab(lt.dataset.learnTab); return; }
+        const qa = t.closest('[data-quiz]');
+        if (qa) { const [qi, choice] = qa.dataset.quiz.split(':').map(Number); answerQuiz(qi, choice); return; }
+        if (t.closest('[data-quiz-reset]')) { resetQuiz(); return; }
         const run = t.closest('[data-open-run]');
         if (run) {
             const box = run.closest('.noise-run');
@@ -1813,7 +2308,10 @@ function setupListeners() {
         const dirRow = t.closest('[data-dir]');
         if (dirRow) { dirRow.parentElement.classList.toggle('collapsed'); return; }
         const entry = t.closest('[data-entry]');
-        if (entry) { jumpToEntry(+entry.dataset.entry); return; }
+        if (entry) {
+            if (S.area === 'learn') { setArea('review'); setTimeout(() => jumpToEntry(+entry.dataset.entry), 0); return; }
+            jumpToEntry(+entry.dataset.entry); return;
+        }
         const gt = t.closest('[data-group-toggle]');
         if (gt) { gt.closest('.toc-group').classList.toggle('collapsed'); return; }
         const jg = t.closest('[data-jump-group]');
@@ -1844,7 +2342,19 @@ function setupListeners() {
         }
         if (modalOpen || e.metaKey || e.ctrlKey || e.altKey) return;
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+        if (S.area === 'learn') {
+            const learnKeys = {
+                l: () => setArea('review'), j: () => stepConcept(1), k: () => stepConcept(-1),
+                e: () => setLearnTab('explain'), q: () => setLearnTab('quiz'),
+                b: toggleSidebar, t: toggleTheme,
+                '?': () => document.getElementById('shortcut-modal').classList.toggle('hidden'),
+            };
+            const fn = learnKeys[e.key];
+            if (fn) { fn(); e.preventDefault(); }
+            return;
+        }
         const keys = {
+            l: () => setArea('learn'),
             j: () => navigateChange(1), k: () => navigateChange(-1),
             n: () => jumpSection(1), p: () => jumpSection(-1),
             f: () => setMode('files'), i: () => setMode('intent'), r: () => setMode('flow'),
@@ -1953,7 +2463,7 @@ async function copyText(text, btn) {
 }
 
 // --- Text helpers ---
-/** Model-written text: `code` spans rendered as code, linked to the change when they name one. */
+/** Model-written text: `code` spans rendered as code, linked to the change when they name one (and `links`). */
 function richText(s, links = true) {
     return esc(s).replace(/`([^`\n]{1,120})`/g, (_, code) => {
         const id = links ? entryIdByName(code) : undefined;

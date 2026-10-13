@@ -372,7 +372,7 @@ pub fn llm_item_counts(input: &IntelInput<'_>) -> (usize, usize) {
     (llm_entry_ids(input).len(), build_units(input).len())
 }
 
-fn build_entry_listing(input: &IntelInput<'_>) -> String {
+pub fn build_entry_listing(input: &IntelInput<'_>) -> String {
     let entries = all_entries(input);
     let mechanical = entries.iter().filter(|e| e.mechanical).count();
     let mut lines: Vec<String> = build_units(input).into_iter().map(|u| u.line).collect();
@@ -561,6 +561,11 @@ pub fn context_chars(results: &[DiffResult], sources: &[(String, String, String)
 /// Build rich context within a char budget, or all of it with None. Small function bodies come
 /// first, then hunks. A quarter of the budget is kept for the hunks.
 pub fn build_rich_context(results: &[DiffResult], sources: &[(String, String, String)], limit: Option<usize>) -> String {
+    build_rich_context_only(results, sources, None, limit)
+}
+
+/// Rich context for only some of the files (indexes into `results`), or all of them with None.
+pub fn build_rich_context_only(results: &[DiffResult], sources: &[(String, String, String)], only: Option<&HashSet<usize>>, limit: Option<usize>) -> String {
     let mut budget: i64 = limit.map_or(i64::MAX, |l| l as i64);
     let reserve: i64 = limit.map_or(0, |l| (l / 4) as i64);
     let mut sections = Vec::new();
@@ -568,6 +573,7 @@ pub fn build_rich_context(results: &[DiffResult], sources: &[(String, String, St
     // 1. Small function bodies (<50 lines), before and/or after.
     let mut bodies = String::from("Changed items (full source when small):\n");
     'outer: for (i, (path, old_src, new_src)) in sources.iter().enumerate() {
+        if only.is_some_and(|o| !o.contains(&i)) { continue; }
         let Some(result) = results.get(i) else { continue };
         let old_lines: Vec<&str> = old_src.lines().collect();
         let new_lines: Vec<&str> = new_src.lines().collect();
@@ -594,7 +600,7 @@ pub fn build_rich_context(results: &[DiffResult], sources: &[(String, String, St
 
     // 2. Diff hunks, skipping mechanical lines (fill remaining budget).
     if budget > 500 {
-        let hunks = build_hunks_budgeted(results, sources, budget as usize);
+        let hunks = build_hunks_budgeted(results, sources, only, budget as usize);
         if !hunks.is_empty() {
             sections.push(format!("Diff (+ added, - removed; unmarked lines are unchanged or only reformatted, moved or renamed):\n{hunks}"));
         }
@@ -603,12 +609,12 @@ pub fn build_rich_context(results: &[DiffResult], sources: &[(String, String, St
     if sections.is_empty() { "(none)".into() } else { sections.join("\n") }
 }
 
-fn build_hunks_budgeted(results: &[DiffResult], sources: &[(String, String, String)], budget: usize) -> String {
+fn build_hunks_budgeted(results: &[DiffResult], sources: &[(String, String, String)], only: Option<&HashSet<usize>>, budget: usize) -> String {
     use perspica_core::manifest::ChangeKind;
     let mut out = Vec::new();
     let mut total = 0;
     for (i, result) in results.iter().enumerate() {
-        if result.review.generated { continue; }
+        if result.review.generated || only.is_some_and(|o| !o.contains(&i)) { continue; }
         let path = sources.get(i).map(|s| s.0.as_str()).unwrap_or("?");
         let mut header_done = false;
         for hunk in &result.hunks {
@@ -632,7 +638,7 @@ fn build_hunks_budgeted(results: &[DiffResult], sources: &[(String, String, Stri
                     let line_no = change.new_span.as_ref().or(change.old_span.as_ref()).map_or(0, |s| s.start_line);
                     let mut missing = vec![format!("{path} from line {line_no}")];
                     missing.extend(results.iter().enumerate().skip(i + 1)
-                        .filter(|(_, r)| !r.review.generated && r.hunks.iter().any(|h| h.noise.is_none()))
+                        .filter(|(k, r)| !r.review.generated && only.is_none_or(|o| o.contains(k)) && r.hunks.iter().any(|h| h.noise.is_none()))
                         .map(|(k, _)| sources.get(k).map_or("?".to_string(), |s| s.0.clone())));
                     out.push(format!("[truncated to stay within the size limit. Not shown: {}. Don't make claims about code you can't see. Say it wasn't shown instead.]", missing.join(", ")));
                     return out.join("\n");
@@ -654,7 +660,7 @@ fn fmt_loc(loc: Option<&Location>) -> String {
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
+pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max { return s.to_string(); }
     let mut end = max;
     while !s.is_char_boundary(end) { end -= 1; }

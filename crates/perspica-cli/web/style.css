@@ -548,6 +548,87 @@ body.wrap .hunk { min-width: 0; }
     .ov-main { max-width: none; }
     .source-title .sub { display: none; }
 }
+/* Learn */
+#learn-panel { display: none; padding: 20px 24px 30vh; }
+body.area-learn #learn-panel { display: block; }
+body.area-learn #nav-bar, body.area-learn #overview, body.area-learn #diff-scroll,
+body.area-learn #mode-toggle, body.area-learn #review-progress,
+body.area-learn #sidebar-tabs, body.area-learn #toc-filter-wrap { display: none !important; }
+.pill-badge { margin-left: 5px; padding: 0 5px; border-radius: 8px; font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; background: var(--bg-3); color: var(--text-1); }
+.pill-btn.active .pill-badge { background: color-mix(in srgb, var(--accent-fg) 22%, transparent); color: var(--accent-fg); }
+
+.concept-list { display: grid; padding: 6px; gap: 2px; }
+.concept-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; text-align: left; background: none; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer; }
+.concept-row:hover { background: var(--bg-2); }
+.concept-row.current { background: var(--accent-muted); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.concept-status { flex: 0 0 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: 700; color: var(--text-3); border: 1px solid var(--border); margin-top: 1px; }
+.concept-status.passed { color: var(--accent-fg); background: var(--risk-low); border-color: var(--risk-low); }
+.concept-status.ready { color: var(--accent); border-color: var(--accent); }
+.concept-status.busy { color: var(--risk-med); border-color: var(--risk-med); animation: pulse 1.4s ease-in-out infinite; }
+.concept-main { display: grid; min-width: 0; }
+.concept-title { color: var(--text-0); font-weight: 500; }
+.concept-kind { color: var(--text-3); font-size: var(--font-size-xs); }
+.concept-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; font-size: var(--font-size-sm); }
+@keyframes pulse { 50% { opacity: .45; } }
+
+.learn-page { max-width: 820px; margin: 0 auto; display: grid; gap: 18px; }
+.learn-empty { padding-top: 6vh; }
+.learn-empty h2, .learn-head h2 { font-size: 20px; font-weight: 600; color: var(--text-0); line-height: 1.3; }
+.learn-empty p { font-size: 14px; line-height: 1.6; color: var(--text-1); max-width: 68ch; }
+.learn-empty .accent-btn, .learn-empty .plain-btn { justify-self: start; }
+.learn-head { display: grid; gap: 8px; justify-items: start; }
+.learn-why { font-size: 14px; line-height: 1.6; color: var(--text-1); }
+.learn-alts { font-size: var(--font-size-sm); color: var(--text-2); }
+.learn-alts ul, .learn-card ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.learn-tabs { justify-self: start; }
+.learn-tabs .count { margin-left: 4px; opacity: .8; font-variant-numeric: tabular-nums; }
+.learn-body { display: grid; gap: 18px; }
+.learn-text { font-size: 14px; line-height: 1.7; color: var(--text-0); display: grid; gap: 12px; max-width: 72ch; }
+.learn-text ul, .learn-text ol { padding-left: 20px; display: grid; gap: 4px; }
+.learn-text code, .learn-tldr code, .learn-card code, .learn-why code, .learn-alts code, .quiz code { background: var(--bg-2); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+.learn-tldr { font-size: 15.5px; line-height: 1.55; color: var(--text-0); font-weight: 500; max-width: 72ch; }
+.learn-intuition { color: var(--text-1); }
+.learn-section { display: grid; gap: 8px; }
+.learn-sources { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
+.learn-sources a { color: var(--accent); }
+.learn-section > .ov-label { margin-bottom: 0; }
+.learn-figure figcaption .chip { margin-right: 2px; }
+.learn-figure { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-1); overflow: hidden; }
+.learn-figure figcaption { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 8px 12px; font-size: var(--font-size-sm); color: var(--text-2); border-bottom: 1px solid var(--border-subtle); }
+.learn-figure figcaption b { color: var(--text-0); font-weight: 600; }
+.learn-frame { display: block; width: 100%; height: 420px; border: 0; background: transparent; }
+.learn-card { border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 12px 14px; font-size: 13.5px; line-height: 1.6; color: var(--text-1); display: grid; gap: 6px; }
+.learn-card.in-change { border-left: 3px solid var(--accent); }
+.learn-card .ov-label { margin-bottom: 0; }
+.learn-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: var(--font-size-sm); }
+.learn-busy { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 16px; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--text-1); font-size: 13.5px; }
+.learn-busy .muted { flex-basis: 100%; padding-left: 26px; font-size: var(--font-size-sm); }
+.learn-busy [data-since] { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.learn-pending { display: grid; gap: 10px; justify-items: start; }
+.learn-error { color: var(--diff-del-fg); font-size: var(--font-size-sm); }
+
+.quiz { display: grid; gap: 14px; }
+.quiz-q { border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; }
+.quiz-n { font-size: var(--font-size-xs); color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.quiz-text { font-size: 14px; line-height: 1.55; color: var(--text-0); }
+.quiz-choices { display: grid; gap: 6px; }
+.quiz-choice { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; font-size: 13.5px; line-height: 1.5; color: var(--text-1); background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.quiz-choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-muted); }
+.quiz-choice:disabled { cursor: default; }
+.quiz-letter { flex: 0 0 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; font-size: var(--font-size-xs); font-weight: 700; background: var(--bg-3); color: var(--text-1); }
+.quiz-choice.correct { border-color: var(--risk-low); background: color-mix(in srgb, var(--risk-low) 12%, transparent); color: var(--text-0); }
+.quiz-choice.correct .quiz-letter { background: var(--risk-low); color: var(--accent-fg); }
+.quiz-choice.wrong { border-color: var(--risk-high); background: color-mix(in srgb, var(--risk-high) 10%, transparent); }
+.quiz-choice.wrong .quiz-letter { background: var(--risk-high); color: var(--accent-fg); }
+.quiz-choice.faded { opacity: .55; }
+.quiz-explain { font-size: 13.5px; line-height: 1.55; color: var(--text-1); padding: 8px 10px; border-radius: var(--radius); background: var(--bg-1); border-left: 3px solid var(--risk-low); }
+.quiz-explain.wrong { border-left-color: var(--risk-high); }
+.quiz-result { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--warn-border); background: var(--warn-bg); color: var(--text-0); font-size: 13.5px; }
+.quiz-result.passed { border-color: color-mix(in srgb, var(--risk-low) 60%, transparent); background: color-mix(in srgb, var(--risk-low) 12%, transparent); }
+.quiz-actions { display: flex; gap: 8px; margin-left: auto; }
+
 @media (max-width: 860px) {
     :root { --gutter: 36px; }
     #sidebar { position: fixed; left: 0; top: var(--header-h); bottom: 0; height: auto; width: min(320px, 86vw) !important; box-shadow: var(--shadow); transform: translateX(-100%); transition: transform .18s ease; }
@@ -560,6 +641,7 @@ body.wrap .hunk { min-width: 0; }
     #diff-scroll { padding: 8px 6px 40vh; }
     #overview { padding: 12px 10px 4px; }
     .section-head { flex-wrap: wrap; }
+    #learn-panel { padding: 14px 12px 30vh; }
 }
 @media (max-width: 560px) {
     /* Phones: the essentials fit on one row; anything wider scrolls instead of spilling out. */

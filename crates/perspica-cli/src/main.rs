@@ -7,6 +7,7 @@ mod web;
 mod deep;
 mod sessions;
 mod saved;
+mod learn;
 
 use clap::Parser;
 use perspica_core::cross_file::{BrokenReferenceEntry, CallSite, CrossFileManifest, FileChange};
@@ -145,6 +146,9 @@ pub struct MultiFileResult {
     /// Why the LLM analysis did not run or failed.
     #[serde(default)]
     pub llm_error: Option<String>,
+    /// The Learn outline and the lessons written so far (the viewer's Learn tab).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub learn: Option<learn::Learn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,6 +342,7 @@ fn main() {
         llm_model: None,
         llm_saved_at: None,
         llm_error: None,
+        learn: None,
     };
 
     if let Some(t) = &target {
@@ -370,6 +375,9 @@ fn main() {
         }
     }
     let wants_llm = wants_llm && !reused;
+    if (format == "web" || format == "html") && !cli.fresh {
+        multi.learn = saved::load_learn(&key);
+    }
 
     if wants_llm {
         match &provider {

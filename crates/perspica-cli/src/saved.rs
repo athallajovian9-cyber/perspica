@@ -3,11 +3,11 @@
 //! analysis twice. Stored in the repository's git directory (`.git/perspica/`),
 //! or `~/.cache/perspica/` outside a repository.
 
-use crate::{intel, MultiFileResult};
+use crate::{intel, learn, MultiFileResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Saved analyses kept per directory; older ones are removed.
+/// Saved analyses (and saved lessons) kept per directory; older ones are removed.
 const MAX_SAVED: usize = 50;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,36 +59,53 @@ fn dir() -> Option<PathBuf> {
     }
 }
 
-fn path(key: &str) -> Option<PathBuf> {
-    Some(dir()?.join(format!("analysis-{key}.json")))
+fn path(kind: &str, key: &str) -> Option<PathBuf> {
+    Some(dir()?.join(format!("{kind}-{key}.json")))
 }
 
 pub fn load(key: &str) -> Option<SavedAnalysis> {
-    let text = std::fs::read_to_string(path(key)?).ok()?;
-    serde_json::from_str(&text).ok()
+    read("analysis", key)
 }
 
 pub fn save(key: &str, analysis: &SavedAnalysis) {
-    let Some(p) = path(key) else { return };
-    let write = || -> std::io::Result<()> {
-        let dir = p.parent().expect("analysis path has a parent");
-        std::fs::create_dir_all(dir)?;
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(analysis).unwrap_or_default())?;
-        std::fs::rename(&tmp, &p)?;
-        prune(dir);
-        Ok(())
-    };
-    if let Err(e) = write() {
+    if let Err(e) = write("analysis", key, analysis) {
         eprintln!("perspica: couldn't save the analysis ({e}); it will be lost on restart");
     }
 }
 
-/// Keep the newest `MAX_SAVED` analyses.
-fn prune(dir: &std::path::Path) {
+/// The Learn outline and the lessons written so far.
+pub fn load_learn(key: &str) -> Option<learn::Learn> {
+    read("learn", key)
+}
+
+pub fn save_learn(key: &str, learn: &learn::Learn) {
+    if let Err(e) = write("learn", key, learn) {
+        eprintln!("perspica: couldn't save the lessons ({e}); they will be lost on restart");
+    }
+}
+
+fn read<T: serde::de::DeserializeOwned>(kind: &str, key: &str) -> Option<T> {
+    let text = std::fs::read_to_string(path(kind, key)?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn write<T: Serialize>(kind: &str, key: &str, value: &T) -> std::io::Result<()> {
+    let p = path(kind, key).ok_or_else(|| std::io::Error::other("no place to save it"))?;
+    let dir = p.parent().expect("saved path has a parent");
+    std::fs::create_dir_all(dir)?;
+    let tmp = p.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(value).unwrap_or_default())?;
+    std::fs::rename(&tmp, &p)?;
+    prune(dir, kind);
+    Ok(())
+}
+
+/// Keep the newest `MAX_SAVED` files of each kind.
+fn prune(dir: &std::path::Path, kind: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let prefix = format!("{kind}-");
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries.flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("analysis-") && e.path().extension().is_some_and(|x| x == "json"))
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix) && e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
     if files.len() <= MAX_SAVED {

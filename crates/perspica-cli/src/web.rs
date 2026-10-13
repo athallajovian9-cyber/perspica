@@ -1,6 +1,7 @@
-use crate::{deep, intel, llm, MultiFileResult};
+use crate::{deep, intel, learn, llm, MultiFileResult};
 use axum::{extract::{Request, State}, http::{header, Method, StatusCode}, middleware::{self, Next}, response::{Html, IntoResponse, Response}, routing::{get, post}, Json, Router};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -13,10 +14,12 @@ struct AppState {
     deep_lock: Mutex<()>,
     /// Identifies this diff for saved analyses.
     key: String,
+    /// Learn jobs running now: "outline", or a concept id while its lesson is written.
+    learn_busy: std::sync::Mutex<HashSet<String>>,
 }
 
 pub async fn serve(result: MultiFileResult, port: u16, provider: Option<Box<dyn llm::LlmProvider>>, detect: llm::Detect, open_browser: bool, key: String) {
-    let state = Arc::new(AppState { result: RwLock::new(result), provider: RwLock::new(provider), detect, deep_lock: Mutex::new(()), key });
+    let state = Arc::new(AppState { result: RwLock::new(result), provider: RwLock::new(provider), detect, deep_lock: Mutex::new(()), key, learn_busy: Default::default() });
 
     // Use the requested port, or the next free one.
     let mut listener = None;
@@ -48,6 +51,7 @@ pub async fn serve(result: MultiFileResult, port: u16, provider: Option<Box<dyn 
         .route("/api/diff", get(api_handler))
         .route("/api/analyze", post(analyze_handler))
         .route("/api/llm/check", post(check_handler))
+        .route("/api/learn", post(learn_handler))
         .layer(middleware::from_fn(move |req, next| local_only(allowed.clone(), req, next)))
         .with_state(state);
     let url = format!("http://{}", listener.local_addr().map(|a| a.to_string()).unwrap_or_default());
@@ -279,5 +283,138 @@ async fn analyze(state: Arc<AppState>, req: AnalyzeRequest) -> (StatusCode, Json
             })))
         }
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct LearnRequest {
+    /// Model id; the provider's default when absent.
+    #[serde(default)]
+    model: Option<String>,
+    /// Send all of the changed code, not just the provider's budget.
+    #[serde(default)]
+    full: bool,
+    /// The concept whose lesson to write. Without it, find the concepts.
+    #[serde(default)]
+    concept: Option<String>,
+}
+
+/// Marks a Learn job as running until it's dropped.
+struct LearnJob<'a>(&'a AppState, String);
+
+impl Drop for LearnJob<'_> {
+    fn drop(&mut self) {
+        self.0.learn_busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+    }
+}
+
+async fn learn_handler(State(state): State<Arc<AppState>>, Json(req): Json<LearnRequest>) -> impl IntoResponse {
+    learn_run(state, req).await
+}
+
+async fn learn_run(state: Arc<AppState>, req: LearnRequest) -> (StatusCode, Json<serde_json::Value>) {
+    let fail = |code: StatusCode, msg: &str| (code, Json(serde_json::json!({ "error": msg })));
+    let base = state.provider.read().await;
+    let Some(base) = &*base else {
+        return fail(StatusCode::SERVICE_UNAVAILABLE, "No LLM set up yet. Log in to Claude Code, set ANTHROPIC_API_KEY or OPENAI_API_KEY, or run Ollama.");
+    };
+    let job = req.concept.clone().unwrap_or_else(|| "outline".into());
+    // One run per job. Lessons for different concepts can be written side by side.
+    if !state.learn_busy.lock().unwrap_or_else(|e| e.into_inner()).insert(job.clone()) {
+        return fail(StatusCode::CONFLICT, "That's already being written.");
+    }
+    let _job = LearnJob(&state, job);
+    let chosen = req.model.as_deref().map(str::trim).filter(|m| !m.is_empty() && *m != base.model()).map(|m| base.with_model(m));
+    let provider: &dyn llm::LlmProvider = chosen.as_deref().unwrap_or(&**base);
+    let started = std::time::Instant::now();
+
+    // Build the prompt, then let go of the result while the model works,
+    // so other requests (and other lessons finishing) aren't held up.
+    let (prompt, paths, concept_title, visual, changed, repo_url) = {
+        let result = state.result.read().await;
+        let sources = result.file_sources();
+        let input = intel::IntelInput {
+            results: &result.results,
+            sources: &sources,
+            cross_file: &result.cross_file,
+            author_context: result.source.author_context.as_deref(),
+            requirements: &result.source.sessions.requirements,
+            budget: (!req.full).then_some(provider.context_budget()),
+        };
+        let paths: Vec<String> = sources.iter().map(|s| s.0.clone()).collect();
+        let changed = learn::changed_lines(&input);
+        let repo_url = result.source.repo_url.clone();
+        match &req.concept {
+            None if learn::mechanical_only(&input) => (None, paths, None, String::new(), changed, repo_url),
+            None => (Some(learn::outline_prompt(&input)), paths, None, String::new(), changed, repo_url),
+            Some(id) => {
+                let Some(learn) = &result.learn else {
+                    return fail(StatusCode::BAD_REQUEST, "Find the concepts first.");
+                };
+                let Some(concept) = learn.concepts.iter().find(|c| &c.id == id) else {
+                    return fail(StatusCode::NOT_FOUND, "That concept isn't in the current list. Reload the page.");
+                };
+                let others: Vec<&str> = learn.concepts.iter().filter(|c| &c.id != id).map(|c| c.title.as_str()).collect();
+                (Some(learn::lesson_prompt(&input, concept, &others, repo_url.as_deref())), paths, Some(concept.title.clone()), concept.visual.clone(), changed, repo_url)
+            }
+        }
+    };
+    let response = match &prompt {
+        Some(p) => match provider.complete(p).await {
+            Ok(r) => Some(r),
+            Err(e) => return fail(StatusCode::BAD_GATEWAY, &e),
+        },
+        None => None,
+    };
+
+    // A lesson's links are checked before the result is locked: the sites can be slow.
+    let lesson = match (&req.concept, &response) {
+        (Some(_), Some(r)) => match learn::parse_lesson(r, provider.model(), &visual) {
+            Ok(mut l) => {
+                learn::check_sources(&mut l, repo_url.as_deref()).await;
+                Some(l)
+            }
+            Err(e) => return fail(StatusCode::BAD_GATEWAY, &e),
+        },
+        _ => None,
+    };
+    let seconds = started.elapsed().as_secs();
+    let mut result = state.result.write().await;
+    match (&req.concept, response) {
+        (None, response) => {
+            let (nothing, concepts) = match response {
+                Some(r) => match learn::parse_outline(&r, &paths, changed) {
+                    Ok(parsed) => parsed,
+                    Err(e) => return fail(StatusCode::BAD_GATEWAY, &e),
+                },
+                None => (Some(learn::NOTHING_MECHANICAL.to_string()), vec![]),
+            };
+            let found = learn::Learn {
+                provider: provider.name().to_string(),
+                model: provider.model().to_string(),
+                saved_at: crate::saved::now(),
+                nothing,
+                concepts,
+            };
+            crate::saved::save_learn(&state.key, &found);
+            result.learn = Some(found.clone());
+            (StatusCode::OK, Json(serde_json::json!({ "learn": found, "seconds": seconds })))
+        }
+        (Some(id), Some(_)) => {
+            let Some(lesson) = lesson else {
+                return fail(StatusCode::INTERNAL_SERVER_ERROR, "No lesson was written.");
+            };
+            // The concepts may have been looked for again while this lesson was written.
+            let Some(learn) = result.learn.as_mut() else {
+                return fail(StatusCode::CONFLICT, "The concept list changed while this was written.");
+            };
+            let Some(concept) = learn.concepts.iter_mut().find(|c| &c.id == id && Some(&c.title) == concept_title.as_ref()) else {
+                return fail(StatusCode::CONFLICT, "The concept list changed while this was written.");
+            };
+            concept.lesson = Some(lesson.clone());
+            crate::saved::save_learn(&state.key, learn);
+            (StatusCode::OK, Json(serde_json::json!({ "concept": id, "lesson": lesson, "seconds": seconds })))
+        }
+        (Some(_), None) => fail(StatusCode::INTERNAL_SERVER_ERROR, "No lesson was written."),
     }
 }
