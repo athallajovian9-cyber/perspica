@@ -91,9 +91,13 @@ body.sidebar-collapsed .area-tabs { width: auto; min-width: 0; padding-right: 12
 }
 .area-tab:hover { color: var(--text-0); }
 .area-tab.active { color: var(--text-0); font-weight: 600; border-bottom-color: var(--accent); }
-.tab-count { min-width: 20px; padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 500; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; background: var(--bg-2); color: var(--text-2); }
+.tab-count { display: inline-flex; align-items: center; justify-content: center; height: 17px; min-width: 20px; padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 500; line-height: 17px; text-align: center; font-variant-numeric: tabular-nums; background: var(--bg-2); color: var(--text-2); }
 .tab-count:empty { display: none; }
 .tab-count.done { background: color-mix(in srgb, var(--risk-low) 16%, transparent); color: var(--risk-low); }
+/* While something is being written: the same pill, with a ring beside the count. */
+.tab-count.busy { display: inline-flex; gap: 5px; }
+.tab-count.busy:empty { gap: 0; }
+.tab-count.busy::before { content: ''; width: 8px; height: 8px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 
 /* Ordering is a view option, so it reads quieter than the area tabs. */
 .header-tools .pill-group { height: 26px; }
@@ -585,12 +589,12 @@ body.area-learn #sidebar-tabs, body.area-learn #toc-filter-wrap { display: none 
 .concept-status { flex: 0 0 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: 700; color: var(--text-3); border: 1px solid var(--border); margin-top: 1px; }
 .concept-status.passed { color: var(--accent-fg); background: var(--risk-low); border-color: var(--risk-low); }
 .concept-status.ready { color: var(--accent); border-color: var(--accent); }
-.concept-status.busy { color: var(--risk-med); border-color: var(--risk-med); animation: pulse 1.4s ease-in-out infinite; }
+/* The same ring as the lesson's own loading message. */
+.concept-status.busy { border: 2px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 .concept-main { display: grid; min-width: 0; }
 .concept-title { color: var(--text-0); font-weight: 500; }
 .concept-kind { color: var(--text-3); font-size: var(--font-size-xs); }
 .concept-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; font-size: var(--font-size-sm); }
-@keyframes pulse { 50% { opacity: .45; } }
 
 .learn-page { max-width: 820px; margin: 0 auto; display: grid; gap: 18px; }
 .learn-empty { padding-top: 6vh; }

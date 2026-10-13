@@ -419,9 +419,12 @@ function renderHeader() {
     document.querySelectorAll('#area-toggle [data-area]').forEach(b => { b.classList.toggle('active', b.dataset.area === S.area); b.setAttribute('aria-selected', String(b.dataset.area === S.area)); });
     const lp = learnProgress();
     const badge = document.getElementById('learn-badge');
-    badge.classList.toggle('hidden', !lp.total && !Object.keys(S.learnBusy).length);
-    badge.textContent = Object.keys(S.learnBusy).length ? '…' : `${lp.passed}/${lp.total}`;
-    badge.title = lp.total ? `${lp.passed} of ${lp.total} concept quizzes passed` : '';
+    const writing = Object.keys(S.learnBusy).length > 0;
+    badge.classList.toggle('hidden', !lp.total && !writing);
+    // The count stays; a small ring beside it says something is being written.
+    badge.classList.toggle('busy', writing);
+    badge.textContent = lp.total ? `${lp.passed}/${lp.total}` : '';
+    badge.title = [lp.total ? `${lp.passed} of ${lp.total} concept quizzes passed` : '', writing ? (S.learnBusy.outline ? 'Looking for concepts…' : 'Writing a lesson…') : ''].filter(Boolean).join('. ');
     document.querySelectorAll('#view-toggle .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.view === S.view));
     document.getElementById('noise-toggle').checked = S.hideNoise;
     document.getElementById('wrap-toggle').checked = S.wrap;
@@ -1764,7 +1767,7 @@ function renderConceptList() {
     const cur = currentConcept();
     const rows = cs.map(c => {
         const sc = quizScore(c);
-        const [cls, icon, label] = S.learnBusy[c.id] ? ['busy', '…', 'Writing the lesson']
+        const [cls, icon, label] = S.learnBusy[c.id] ? ['busy', '', 'Writing the lesson']
             : sc.passed ? ['passed', '✓', 'Quiz passed']
             : c.lesson ? ['ready', '○', sc.answered ? `Quiz: ${sc.right} of ${sc.total} right` : 'Lesson ready']
             : ['empty', '·', 'Lesson not written yet'];
