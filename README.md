@@ -133,12 +133,9 @@ Each concept has:
 - links to the documentation it comes from;
 - a quiz of one to three questions, to check you've understood it before you approve the change.
 
-<a href="docs/media/perspica-learn-demo.mp4"><picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/learn-dark.jpg">
-  <img alt="Learn for pallets/flask#5818: the architecture concept 'Explicit context instead of proxies', with its summary, an everyday picture of the idea, and a before/after diagram of how the context flows through Flask's dispatch methods" src="docs/images/learn-light.jpg">
-</picture></a>
+<a href="docs/media/perspica-learn-demo.mp4"><img alt="Learn demo: an architecture diagram for Flask's context passing, a slider showing how lipgloss clips layers drawn at absolute bounds, an animation of a late WebSocket Pong in uvicorn, and quiz answers with their explanations" src="docs/media/perspica-learn-demo.gif"></a>
 
-<sub>Learn on [pallets/flask#5818](https://github.com/pallets/flask/pull/5818). [Watch the Learn demo (MP4)](docs/media/perspica-learn-demo.mp4): that diagram, a hands-on piece from [charmbracelet/lipgloss#591](https://github.com/charmbracelet/lipgloss/pull/591) and an animation from [encode/uvicorn#2985](https://github.com/encode/uvicorn/pull/2985).</sub>
+<sub>Learn on [pallets/flask#5818](https://github.com/pallets/flask/pull/5818) (architecture diagram), [charmbracelet/lipgloss#591](https://github.com/charmbracelet/lipgloss/pull/591) (a hands-on piece and a quiz) and [encode/uvicorn#2985](https://github.com/encode/uvicorn/pull/2985) (an animation and a quiz). [Full-quality video (MP4)](docs/media/perspica-learn-demo.mp4).</sub>
 
 Learn uses the same setup as [LLM analysis](#llm-analysis): open the tab, pick a model, and perspica looks for concepts. Each lesson is written the first time you open its concept, and saved in `.git/perspica/` with the analysis, so it's only written once. If a lesson isn't good enough, **Rewrite…** writes it again, with a stronger model if you like. Lessons are kept in `--format html` exports, so a shared review keeps its lessons and quizzes.
 
