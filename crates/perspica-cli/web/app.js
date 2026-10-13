@@ -416,7 +416,7 @@ function renderHeader() {
         }
         if (b.dataset.mode === 'flow') b.classList.toggle('hidden', !hasFlow());
     });
-    document.querySelectorAll('#area-toggle .pill-btn').forEach(b => b.classList.toggle('active', b.dataset.area === S.area));
+    document.querySelectorAll('#area-toggle [data-area]').forEach(b => { b.classList.toggle('active', b.dataset.area === S.area); b.setAttribute('aria-selected', String(b.dataset.area === S.area)); });
     const lp = learnProgress();
     const badge = document.getElementById('learn-badge');
     badge.classList.toggle('hidden', !lp.total && !Object.keys(S.learnBusy).length);
@@ -446,8 +446,8 @@ function renderProgress() {
     const total = bySection ? groups.length : S.data.files.length;
     const done = bySection ? groups.filter(g => S.groupsReviewed[g.key]).length : S.data.files.filter(f => S.viewed[f.new_path]).length;
     const el = document.getElementById('review-progress');
-    el.textContent = `${done} / ${total} ${bySection ? 'section' : 'file'}${pl(total)} viewed`;
-    el.title = bySection ? 'Sections of this view marked as viewed (v)' : 'Files marked as viewed (v)';
+    el.textContent = `${done}/${total}`;
+    el.title = `${done} of ${total} ${bySection ? 'section' : 'file'}${pl(total)} marked as viewed (v)`;
     el.classList.toggle('done', done === total && total > 0);
 }
 
@@ -756,7 +756,7 @@ function renderGroupList() {
         html += `<div class="toc-group${reviewed ? ' reviewed' : ''}${folded ? ' collapsed' : ''}" data-gi="${gi}">
             <div class="toc-head" data-jump-group="${gi}" title="Go to this group">
                 <span class="chev" data-group-toggle title="Show entries">▼</span><span class="num">${gi + 1}</span>
-                <span class="title${g.flow ? ' flow-title' : ''}"${g.flow ? ` style="padding-left:${Math.min(g.flow.depth, 6) * 10}px" title="${esc(g.label)} · ${esc(g.flow.file)}"` : ''}>${g.flow ? `<span class="flow-name">${g.flow.depth ? '<span class="flow-depth">└ </span>' : ''}${flowLabel(g.label)}</span><span class="flow-file">${esc(baseName(g.flow.file))}</span>` : esc(g.label)}${g.note && !g.flow ? `<span class="note" title="${esc(g.note)}">${richText(g.note, false)}</span>` : ''}</span>
+                <span class="title${g.flow ? ' flow-title' : ''}"${g.flow ? ` style="padding-left:${Math.min(g.flow.depth, 6) * 10}px" title="${esc(g.label)} · ${esc(g.flow.file)}"` : ''}>${g.flow ? `<span class="flow-name">${g.flow.depth ? '<span class="flow-depth">└ </span>' : ''}${flowLabel(g.label)}</span><span class="flow-file">${esc(baseName(g.flow.file))}</span>` : `<span class="t">${esc(g.label)}</span>`}${g.note && !g.flow ? `<span class="note" title="${esc(g.note)}">${richText(g.note, false)}</span>` : ''}</span>
                 ${riskHtml(g.risk)}${g.origin === 'autonomous' ? originChip(g) : ''}
                 <span class="n" title="+${st.add} −${st.del} lines">${g.ids.length || hunks.length}</span>
             </div>
@@ -964,7 +964,7 @@ function groupHeadHtml(g, gi) {
 function riskHtml(risk) {
     if (!risk) return '';
     const label = { high: 'High risk', medium: 'Medium risk', low: 'Low risk' }[risk] || risk;
-    return `<span class="risk ${esc(risk)}">${label}</span>`;
+    return `<span class="risk ${esc(risk)}" title="${label}">${label}</span>`;
 }
 
 function originChip(g) {
@@ -1824,9 +1824,9 @@ function busyHtml(what, busy) {
 function conceptPageHtml(c) {
     const sc = quizScore(c);
     const n = c.lesson?.quiz?.length || 0;
-    const tabs = c.lesson ? `<div class="pill-group learn-tabs" role="tablist" aria-label="Lesson">
-            <button class="pill-btn${S.learnTab === 'explain' ? ' active' : ''}" data-learn-tab="explain" role="tab" title="Explanation (e)">Explain</button>
-            <button class="pill-btn${S.learnTab === 'quiz' ? ' active' : ''}" data-learn-tab="quiz" role="tab" title="Quiz (q)"${n ? '' : ' disabled'}>Quiz${n ? ` <span class="count">${sc.answered ? `${sc.right}/${n}` : n}</span>` : ''}</button>
+    const tabs = c.lesson ? `<div class="learn-tabs" role="tablist" aria-label="Lesson">
+            <button class="learn-tab${S.learnTab === 'explain' ? ' active' : ''}" data-learn-tab="explain" role="tab" aria-selected="${S.learnTab === 'explain'}" title="Explanation (e)">Explain</button>
+            <button class="learn-tab${S.learnTab === 'quiz' ? ' active' : ''}" data-learn-tab="quiz" role="tab" aria-selected="${S.learnTab === 'quiz'}" title="Quiz (q)"${n ? '' : ' disabled'}>Quiz${n ? `<span class="tab-count${sc.passed ? ' done' : ''}">${sc.answered ? `${sc.right}/${n}` : n}</span>` : ''}</button>
         </div>` : '';
     const alts = c.chosen_over?.length ? `<div class="learn-alts"><div class="ov-label">Likely chosen over</div><ul>${c.chosen_over.map(a => `<li>${mdInline(a)}</li>`).join('')}</ul></div>` : '';
     return `<article class="learn-page">
@@ -2404,13 +2404,15 @@ function markCurrentTreeRow(row) {
 function setupSidebarResize() {
     const handle = document.getElementById('sidebar-resize');
     const sidebar = document.getElementById('sidebar');
+    // A variable on the page, not the sidebar's own width: the header's tabs line up with it too.
+    const setWidth = w => document.documentElement.style.setProperty('--sidebar-width', w + 'px');
     const saved = store.get('sidebarWidth', 0);
-    if (saved) sidebar.style.width = saved + 'px';
+    if (saved) setWidth(saved);
     handle.addEventListener('mousedown', (e) => {
         e.preventDefault();
         const startX = e.clientX, startW = sidebar.offsetWidth;
         handle.classList.add('dragging');
-        const move = (ev) => { sidebar.style.width = Math.max(200, Math.min(560, startW + ev.clientX - startX)) + 'px'; };
+        const move = (ev) => setWidth(Math.max(200, Math.min(560, startW + ev.clientX - startX)));
         const up = () => {
             handle.classList.remove('dragging');
             store.set('sidebarWidth', sidebar.offsetWidth);
