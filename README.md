@@ -7,9 +7,13 @@
   <a href="https://crates.io/crates/perspica"><img alt="crates.io" src="https://img.shields.io/crates/v/perspica.svg"></a>
   <a href="https://github.com/sshah03/perspica/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/sshah03/perspica"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-orange.svg">
 </p>
 
 <p align="center"><b>Review code changes by what they do, and learn the concepts behind them.</b></p>
+
+> [!NOTE]
+> perspica is in beta. Expect rough edges, and behavior that may change between 0.x releases. If something looks wrong, please [open an issue](https://github.com/sshah03/perspica/issues).
 
 perspica reads a diff by working out what actually changed (a rename, a new parameter, a moved function, a real logic change), setting aside the mechanical noise (reformatting, comments, rename-only lines, unchanged moves, generated files), and pointing at what a plain diff hides: references to names that no longer exist, calls that weren't updated for a new signature, code left unused.
 
