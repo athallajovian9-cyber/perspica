@@ -1,8 +1,12 @@
 #!/bin/sh
 # Prints the Homebrew formula for a release, with checksums from its SHA256SUMS.
-# After a release, update the tap (github.com/sshah03/homebrew-perspica) with:
+# After a release, put it in a pull request on the tap (github.com/sshah03/homebrew-perspica):
 #
-#   scripts/homebrew-formula.sh 0.1.9 > ../homebrew-perspica/Formula/perspica.rb
+#   scripts/homebrew-formula.sh 0.2.1 > ../homebrew-perspica/Formula/perspica.rb
+#
+# The tap's CI builds bottles for the pull request. Then run its "brew pr-pull" workflow with
+# the pull request number, which publishes the bottles and merges. Without bottles, Homebrew
+# treats the formula as a source build and refuses to install with outdated Command Line Tools.
 set -eu
 
 version="${1:?usage: scripts/homebrew-formula.sh <version>}"
@@ -18,9 +22,8 @@ sha() {
 
 cat <<EOF
 class Perspica < Formula
-  desc "Review code changes by what they do, not line by line"
+  desc "Review code changes by what they do, and learn the concepts behind them"
   homepage "https://github.com/sshah03/perspica"
-  version "$version"
   license "MIT"
 
   on_macos do
